@@ -17,6 +17,9 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Languages.Go {
 		t.Error("expected Go enabled by default")
 	}
+	if !cfg.Languages.Java {
+		t.Error("expected Java enabled by default")
+	}
 	if cfg.Indexing.MaxFileSizeBytes != 1<<20 {
 		t.Errorf("expected max file size 1MiB, got %d", cfg.Indexing.MaxFileSizeBytes)
 	}

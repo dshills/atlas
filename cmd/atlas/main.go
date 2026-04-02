@@ -12,6 +12,7 @@ import (
 	"github.com/dshills/atlas/internal/db"
 	"github.com/dshills/atlas/internal/extractor"
 	"github.com/dshills/atlas/internal/extractor/goextractor"
+	"github.com/dshills/atlas/internal/extractor/javaextractor"
 	"github.com/dshills/atlas/internal/extractor/pyextractor"
 	"github.com/dshills/atlas/internal/extractor/rustextractor"
 	"github.com/dshills/atlas/internal/extractor/tsextractor"
@@ -216,6 +217,7 @@ func configCmd() *cobra.Command {
 func buildRegistry() *extractor.Registry {
 	reg := extractor.NewRegistry()
 	reg.Register(goextractor.New())
+	reg.Register(javaextractor.New())
 	reg.Register(tsextractor.New())
 	reg.Register(pyextractor.New())
 	reg.Register(rustextractor.New())

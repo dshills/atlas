@@ -16,19 +16,21 @@ import "strings"
 
 // LineFilter returns a slice of booleans, one per line, where true means the
 // line is code and false means the line is inside a comment or docstring block.
-// Supported lang values: "typescript", "javascript", "python", "rust".
+// Supported lang values: "typescript", "javascript", "python", "rust", "java", "csharp", "swift", "lua".
 // Lines containing both code and a trailing comment are marked as code.
 func LineFilter(content string, lang string) []bool {
 	lines := strings.Split(content, "\n")
 	result := make([]bool, len(lines))
 
 	switch lang {
-	case "typescript", "javascript":
+	case "typescript", "javascript", "java", "csharp":
 		filterCStyle(lines, result, false)
-	case "rust":
+	case "rust", "swift":
 		filterCStyle(lines, result, true)
 	case "python":
 		filterPython(lines, result)
+	case "lua":
+		filterLua(lines, result)
 	default:
 		// Unknown language: treat all lines as code.
 		for i := range result {
@@ -140,6 +142,47 @@ func filterPython(lines []string, result []bool) {
 					result[i] = false
 				}
 			}
+			continue
+		}
+
+		result[i] = true
+	}
+}
+
+// filterLua handles -- single-line and --[[ ]] block comments.
+// Block comments are non-nestable.
+func filterLua(lines []string, result []bool) {
+	inBlock := false
+
+	for i, line := range lines {
+		if inBlock {
+			result[i] = false
+			if strings.Contains(line, "]]") {
+				inBlock = false
+			}
+			continue
+		}
+
+		trimmed := strings.TrimSpace(line)
+
+		// Check for block comment opening.
+		if idx := strings.Index(trimmed, "--[["); idx >= 0 {
+			if idx > 0 {
+				result[i] = true
+			} else {
+				result[i] = false
+			}
+			// Check if block closes on the same line after the opener.
+			rest := line[strings.Index(line, "--[[")+4:]
+			if !strings.Contains(rest, "]]") {
+				inBlock = true
+			}
+			continue
+		}
+
+		// Single-line comment: entire line is a comment.
+		if strings.HasPrefix(trimmed, "--") {
+			result[i] = false
 			continue
 		}
 

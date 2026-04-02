@@ -14,14 +14,15 @@ func DefaultConfig() Config {
 	return Config{
 		Version:    1,
 		StorageDir: DefaultStorageDir,
-		Include:    []string{"**/*.go", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.pyi", "**/*.rs"},
-		Exclude:    []string{"vendor/**", "node_modules/**", ".git/**", "testdata/**", "__pycache__/**", "target/**", ".venv/**", "venv/**"},
+		Include:    []string{"**/*.go", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.pyi", "**/*.rs", "**/*.java"},
+		Exclude:    []string{"vendor/**", "node_modules/**", ".git/**", "testdata/**", "__pycache__/**", "target/**", ".venv/**", "venv/**", "build/**"},
 		Languages: LanguageConfig{
 			Go:         true,
 			TypeScript: true,
 			JavaScript: true,
 			Python:     true,
 			Rust:       true,
+			Java:       true,
 		},
 		Indexing: IndexingConfig{
 			MaxFileSizeBytes: DefaultMaxFileSize,
@@ -51,6 +52,7 @@ include:
   - "**/*.py"
   - "**/*.pyi"
   - "**/*.rs"
+  - "**/*.java"
 exclude:
   - "vendor/**"
   - "node_modules/**"
@@ -60,12 +62,14 @@ exclude:
   - "target/**"
   - ".venv/**"
   - "venv/**"
+  - "build/**"
 languages:
   go: true
   typescript: true
   javascript: true
   python: true
   rust: true
+  java: true
 indexing:
   max_file_size_bytes: 1048576
 summaries:

@@ -271,6 +271,87 @@ func TestLineFilter_Python_MixedTripleQuotes(t *testing.T) {
 	assertLines(t, result, expected)
 }
 
+func TestLineFilter_Java_SingleLineAndBlock(t *testing.T) {
+	content := `int x = 1;
+// single line comment
+int y = 2;
+/* block comment
+   spanning lines */
+int z = 3;`
+
+	result := LineFilter(content, "java")
+	expected := []bool{true, false, true, false, false, true}
+	assertLines(t, result, expected)
+}
+
+func TestLineFilter_CSharp_SingleLineAndBlock(t *testing.T) {
+	content := `int x = 1;
+// single line comment
+int y = 2;
+/* block comment
+   spanning lines */
+int z = 3;`
+
+	result := LineFilter(content, "csharp")
+	expected := []bool{true, false, true, false, false, true}
+	assertLines(t, result, expected)
+}
+
+func TestLineFilter_Swift_NestedBlockComments(t *testing.T) {
+	content := `let x = 1
+/* outer
+  /* inner */
+  still outer
+*/
+let y = 2`
+
+	result := LineFilter(content, "swift")
+	expected := []bool{true, false, false, false, false, true}
+	assertLines(t, result, expected)
+}
+
+func TestLineFilter_Lua_SingleLineComments(t *testing.T) {
+	content := `local x = 1
+-- this is a comment
+local y = 2
+   -- indented comment
+local z = x + y`
+
+	result := LineFilter(content, "lua")
+	expected := []bool{true, false, true, false, true}
+	assertLines(t, result, expected)
+}
+
+func TestLineFilter_Lua_BlockComments(t *testing.T) {
+	content := `local x = 1
+--[[
+block comment
+spanning lines
+]]
+local y = 2`
+
+	result := LineFilter(content, "lua")
+	expected := []bool{true, false, false, false, false, true}
+	assertLines(t, result, expected)
+}
+
+func TestLineFilter_Lua_MixedComments(t *testing.T) {
+	content := strings.Join([]string{
+		`local x = 1`,
+		`-- single line comment`,
+		`local y = 2`,
+		`--[[`,
+		`block comment`,
+		`]]`,
+		`local z = 3`,
+		`-- another single line`,
+	}, "\n")
+
+	result := LineFilter(content, "lua")
+	expected := []bool{true, false, true, false, false, false, true, false}
+	assertLines(t, result, expected)
+}
+
 func assertLines(t *testing.T, got, expected []bool) {
 	t.Helper()
 	if len(got) != len(expected) {
