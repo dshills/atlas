@@ -72,6 +72,9 @@ func (r *RustExtractor) Extract(_ context.Context, req extractor.ExtractRequest)
 	result.References = append(result.References, svcRefs...)
 	result.Artifacts = append(result.Artifacts, svcArts...)
 
+	// Extract calls
+	result.References = append(result.References, extractCalls(content, lines, codeLines, result.Symbols, moduleName)...)
+
 	// Extract test references
 	result.References = append(result.References, extractTestReferences(result.Symbols, moduleName)...)
 
