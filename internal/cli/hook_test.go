@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -118,5 +119,75 @@ func TestHookIdempotentInstall(t *testing.T) {
 	// hasAtlasHook should prevent double-add in real code
 	if !hasAtlasHook(settings) {
 		t.Error("expected hook to still be detected")
+	}
+}
+
+func TestWriteClaudeMDCreatesFile(t *testing.T) {
+	dir := t.TempDir()
+
+	mdPath, err := writeClaudeMD(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(content), "## Atlas Index") {
+		t.Error("expected CLAUDE.md to contain Atlas Index section")
+	}
+	if !strings.Contains(string(content), "atlas find symbol") {
+		t.Error("expected CLAUDE.md to contain atlas command examples")
+	}
+}
+
+func TestWriteClaudeMDAppendsToExisting(t *testing.T) {
+	dir := t.TempDir()
+	mdPath := filepath.Join(dir, "CLAUDE.md")
+
+	existing := "# CLAUDE.md\n\nExisting instructions here.\n"
+	if err := os.WriteFile(mdPath, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := writeClaudeMD(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(content), "Existing instructions here.") {
+		t.Error("expected existing content to be preserved")
+	}
+	if !strings.Contains(string(content), "## Atlas Index") {
+		t.Error("expected Atlas section to be appended")
+	}
+}
+
+func TestWriteClaudeMDSkipsIfPresent(t *testing.T) {
+	dir := t.TempDir()
+	mdPath := filepath.Join(dir, "CLAUDE.md")
+
+	content := "# CLAUDE.md\n\n## Atlas Index\n\nAlready here.\n"
+	if err := os.WriteFile(mdPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := writeClaudeMD(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(after) != content {
+		t.Error("expected CLAUDE.md to remain unchanged when Atlas section already exists")
 	}
 }

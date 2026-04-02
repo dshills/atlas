@@ -268,6 +268,12 @@ atlas hook install
 
 The `atlas hook install` command adds a `PreToolUse` hook to `.claude/settings.json` that runs `atlas index` before each Bash command. This keeps the index fresh as Claude makes changes — no manual re-indexing needed.
 
+Use `--claude-md` to also append Atlas usage instructions to your project's `CLAUDE.md`:
+
+```bash
+atlas hook install --claude-md   # Install hook + write CLAUDE.md instructions
+```
+
 ```bash
 atlas hook status      # Check if hook is installed
 atlas hook uninstall   # Remove the hook

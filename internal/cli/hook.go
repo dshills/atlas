@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/dshills/atlas/internal/output"
 	"github.com/spf13/cobra"
@@ -12,6 +13,23 @@ import (
 
 const hookCommand = "atlas index 2>/dev/null"
 const hookTimeout = 15000
+
+const claudeMDSection = `## Atlas Index
+
+This repository has an Atlas index for structural and semantic code queries.
+Use atlas commands with --agent for compact JSON instead of reading source files:
+
+- ` + "`atlas find symbol <name> --agent`" + ` — find symbol definitions
+- ` + "`atlas who-calls <symbol> --agent`" + ` — find callers
+- ` + "`atlas calls <symbol> --agent`" + ` — find callees
+- ` + "`atlas implementations <interface> --agent`" + ` — find implementations
+- ` + "`atlas tests-for <symbol> --agent`" + ` — find related tests
+- ` + "`atlas summarize file <path> --agent`" + ` — get file summary
+- ` + "`atlas list routes --agent`" + ` — list HTTP routes
+- ` + "`atlas export graph --agent`" + ` — get full dependency graph
+
+The index auto-updates via a PreToolUse hook. To manually re-index: ` + "`atlas index`" + `
+`
 
 // HookCmd creates the `atlas hook` command with install/uninstall subcommands.
 func HookCmd(ctx *CLIContext) *cobra.Command {
@@ -167,8 +185,44 @@ func removeAtlasHook(settings map[string]any) bool {
 	return removed
 }
 
+func writeClaudeMD(repoRoot string) (string, error) {
+	mdPath := filepath.Join(repoRoot, "CLAUDE.md")
+
+	existing, err := os.ReadFile(mdPath)
+	if err != nil && !os.IsNotExist(err) {
+		return mdPath, fmt.Errorf("reading CLAUDE.md: %w", err)
+	}
+
+	if strings.Contains(string(existing), "## Atlas Index") {
+		return mdPath, nil // already has Atlas section
+	}
+
+	f, err := os.OpenFile(mdPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return mdPath, fmt.Errorf("opening CLAUDE.md: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	content := claudeMDSection
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n\n") {
+		if strings.HasSuffix(string(existing), "\n") {
+			content = "\n" + content
+		} else {
+			content = "\n\n" + content
+		}
+	}
+
+	if _, err := f.WriteString(content); err != nil {
+		return mdPath, fmt.Errorf("writing CLAUDE.md: %w", err)
+	}
+
+	return mdPath, nil
+}
+
 func hookInstallCmd(ctx *CLIContext) *cobra.Command {
-	return &cobra.Command{
+	var flagClaudeMD bool
+
+	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install Claude Code PreToolUse hook for automatic re-indexing",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -183,34 +237,47 @@ func hookInstallCmd(ctx *CLIContext) *cobra.Command {
 				return fmt.Errorf("reading settings: %w", err)
 			}
 
+			hookStatus := "installed"
 			if hasAtlasHook(settings) {
-				f := ctx.Formatter()
-				if ctx.OutputMode() == output.ModeText {
-					return f.WriteText([]output.KV{
-						{Key: "Status", Value: "already installed"},
-						{Key: "File", Value: path},
-					})
+				hookStatus = "already installed"
+			} else {
+				addAtlasHook(settings)
+				if err := saveSettings(path, settings); err != nil {
+					return fmt.Errorf("writing settings: %w", err)
 				}
-				return f.Write(map[string]string{"status": "already_installed", "file": path})
 			}
 
-			addAtlasHook(settings)
+			kvs := []output.KV{
+				{Key: "Hook", Value: hookStatus},
+				{Key: "Settings", Value: path},
+			}
 
-			if err := saveSettings(path, settings); err != nil {
-				return fmt.Errorf("writing settings: %w", err)
+			if flagClaudeMD {
+				mdPath, err := writeClaudeMD(repoRoot)
+				if err != nil {
+					return err
+				}
+				mdStatus := "written"
+				existing, _ := os.ReadFile(mdPath)
+				if strings.Contains(string(existing), "## Atlas Index") {
+					mdStatus = "already present"
+				}
+				kvs = append(kvs, output.KV{Key: "CLAUDE.md", Value: mdStatus})
 			}
 
 			f := ctx.Formatter()
 			if ctx.OutputMode() == output.ModeText {
-				return f.WriteText([]output.KV{
-					{Key: "Status", Value: "installed"},
-					{Key: "File", Value: path},
-					{Key: "Hook", Value: "PreToolUse (Bash) -> atlas index"},
-				})
+				return f.WriteText(kvs)
 			}
-			return f.Write(map[string]string{"status": "installed", "file": path})
+			result := make(map[string]string)
+			for _, kv := range kvs {
+				result[kv.Key] = kv.Value
+			}
+			return f.Write(result)
 		},
 	}
+	cmd.Flags().BoolVar(&flagClaudeMD, "claude-md", false, "Also write Atlas instructions to CLAUDE.md")
+	return cmd
 }
 
 func hookUninstallCmd(ctx *CLIContext) *cobra.Command {
