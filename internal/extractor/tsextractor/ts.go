@@ -81,6 +81,16 @@ func (t *TSExtractor) Extract(_ context.Context, req extractor.ExtractRequest) (
 	result.References = append(result.References, configRefs...)
 	result.Artifacts = append(result.Artifacts, configArts...)
 
+	// Extract SQL artifacts
+	sqlRefs, sqlArts := extractSQLArtifacts(content, lines, req.FilePath, codeLines)
+	result.References = append(result.References, sqlRefs...)
+	result.Artifacts = append(result.Artifacts, sqlArts...)
+
+	// Extract services
+	svcRefs, svcArts := extractServices(content, lines, codeLines)
+	result.References = append(result.References, svcRefs...)
+	result.Artifacts = append(result.Artifacts, svcArts...)
+
 	// Extract test references
 	result.References = append(result.References, extractTestReferences(result.Symbols, moduleName)...)
 
