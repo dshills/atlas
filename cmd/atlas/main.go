@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/dshills/atlas/internal/cli"
 	"github.com/dshills/atlas/internal/config"
 	"github.com/dshills/atlas/internal/db"
 	"github.com/dshills/atlas/internal/extractor"
@@ -37,14 +38,28 @@ func main() {
 	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().BoolVar(&flagAgent, "agent", false, "Output in compact agent JSON format")
 
+	cliCtx := &cli.CLIContext{
+		FlagRepo:  &flagRepo,
+		FlagJSON:  &flagJSON,
+		FlagAgent: &flagAgent,
+	}
+
 	rootCmd.AddCommand(
 		versionCmd(),
 		initCmd(),
 		configCmd(),
 		indexCmd(),
 		reindexCmd(),
-		placeholderCmd("stale", "List stale summaries"),
-		placeholderCmd("stats", "Show repository statistics"),
+		cli.FindCmd(cliCtx),
+		cli.WhoCallsCmd(cliCtx),
+		cli.CallsCmd(cliCtx),
+		cli.ImplementationsCmd(cliCtx),
+		cli.ImportsCmd(cliCtx),
+		cli.TestsForCmd(cliCtx),
+		cli.TouchesCmd(cliCtx),
+		cli.ListCmd(cliCtx),
+		cli.StatsCmd(cliCtx),
+		cli.StaleCmd(cliCtx),
 		placeholderCmd("doctor", "Check repository health"),
 		placeholderCmd("validate", "Validate index integrity"),
 	)
