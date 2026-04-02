@@ -60,6 +60,7 @@ func main() {
 		cli.ListCmd(cliCtx),
 		cli.StatsCmd(cliCtx),
 		cli.StaleCmd(cliCtx),
+		cli.SummarizeCmd(cliCtx, Version),
 		placeholderCmd("doctor", "Check repository health"),
 		placeholderCmd("validate", "Validate index integrity"),
 	)
@@ -260,6 +261,7 @@ func indexCmd() *cobra.Command {
 			idx := indexer.New(repoRoot, cfg, s)
 			idx.Registry = buildRegistry()
 			idx.ModulePath = goextractor.DetectModulePath(repoRoot)
+			idx.GeneratorVersion = Version
 			result, err := idx.Run(mode, flagSince)
 			if err != nil {
 				return err
@@ -311,6 +313,7 @@ func reindexCmd() *cobra.Command {
 			idx := indexer.New(repoRoot, cfg, s)
 			idx.Registry = buildRegistry()
 			idx.ModulePath = goextractor.DetectModulePath(repoRoot)
+			idx.GeneratorVersion = Version
 			if err := idx.ClearAll(); err != nil {
 				return fmt.Errorf("clearing data: %w", err)
 			}

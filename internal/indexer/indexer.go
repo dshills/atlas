@@ -13,17 +13,19 @@ import (
 	"github.com/dshills/atlas/internal/fswalk"
 	"github.com/dshills/atlas/internal/hash"
 	"github.com/dshills/atlas/internal/store"
+	"github.com/dshills/atlas/internal/summary"
 	"github.com/dshills/atlas/internal/vcs"
 )
 
 // Indexer orchestrates file scanning, hashing, extraction, and persistence.
 type Indexer struct {
-	RepoRoot   string
-	Config     config.Config
-	Store      *store.Store
-	Registry   *extractor.Registry
-	Diag       *diag.Collector
-	ModulePath string
+	RepoRoot         string
+	Config           config.Config
+	Store            *store.Store
+	Registry         *extractor.Registry
+	Diag             *diag.Collector
+	ModulePath       string
+	GeneratorVersion string
 }
 
 // New creates a new Indexer.
@@ -182,6 +184,11 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 		idx.Diag.AddError(diag.CodeOrphanedReference, fmt.Sprintf("reference resolution failed: %v", err))
 	}
 
+	// Generate summaries if enabled
+	if idx.Config.Summaries.Enabled {
+		idx.generateSummaries()
+	}
+
 	if err := idx.Store.PersistDiagnostics(runID, idx.Diag.All()); err != nil {
 		return nil, fmt.Errorf("persisting diagnostics: %w", err)
 	}
@@ -320,6 +327,66 @@ func (idx *Indexer) collectCandidates(since string) ([]fswalk.FileCandidate, err
 		return nil, fmt.Errorf("walking: %w", err)
 	}
 	return candidates, nil
+}
+
+// generateSummaries creates summaries for all indexed files and packages.
+func (idx *Indexer) generateSummaries() {
+	gen := summary.NewGenerator(idx.Store.DB, idx.GeneratorVersion)
+
+	if idx.Config.Summaries.File || idx.Config.Summaries.Symbol {
+		rows, err := idx.Store.DB.Query(`SELECT id FROM files WHERE parse_status = 'ok'`)
+		if err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("querying files for summaries: %v", err))
+			return
+		}
+		var fileIDs []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("scanning file ID: %v", err))
+				return
+			}
+			fileIDs = append(fileIDs, id)
+		}
+		_ = rows.Close()
+
+		for _, fid := range fileIDs {
+			if idx.Config.Summaries.File {
+				if err := gen.GenerateFileSummary(fid); err != nil {
+					idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("file summary generation failed: %v", err))
+				}
+			}
+			if idx.Config.Summaries.Symbol {
+				symRows, err := idx.Store.DB.Query(`SELECT id FROM symbols WHERE file_id = ?`, fid)
+				if err != nil {
+					idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("querying symbols for summaries: %v", err))
+					continue
+				}
+				var symIDs []int64
+				for symRows.Next() {
+					var sid int64
+					if err := symRows.Scan(&sid); err != nil {
+						_ = symRows.Close()
+						break
+					}
+					symIDs = append(symIDs, sid)
+				}
+				_ = symRows.Close()
+				for _, sid := range symIDs {
+					if err := gen.GenerateSymbolSummary(sid); err != nil {
+						idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("symbol summary generation failed: %v", err))
+					}
+				}
+			}
+		}
+	}
+
+	if idx.Config.Summaries.Package {
+		if err := gen.GenerateAllPackages(); err != nil {
+			idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("package summary generation failed: %v", err))
+		}
+	}
 }
 
 // ClearAll removes all derived data for a full reindex.
