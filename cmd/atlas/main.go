@@ -9,9 +9,11 @@ import (
 
 	"github.com/dshills/atlas/internal/config"
 	"github.com/dshills/atlas/internal/db"
+	"github.com/dshills/atlas/internal/indexer"
 	"github.com/dshills/atlas/internal/model"
 	"github.com/dshills/atlas/internal/output"
 	"github.com/dshills/atlas/internal/repo"
+	"github.com/dshills/atlas/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -37,8 +39,8 @@ func main() {
 		versionCmd(),
 		initCmd(),
 		configCmd(),
-		placeholderCmd("index", "Index the repository"),
-		placeholderCmd("reindex", "Reindex the repository from scratch"),
+		indexCmd(),
+		reindexCmd(),
 		placeholderCmd("stale", "List stale summaries"),
 		placeholderCmd("stats", "Show repository statistics"),
 		placeholderCmd("doctor", "Check repository health"),
@@ -184,6 +186,122 @@ func configCmd() *cobra.Command {
 				})
 			}
 			return f.Write(cfg)
+		},
+	}
+}
+
+func openDB(repoRoot string) (*store.Store, func(), error) {
+	dbPath := filepath.Join(repoRoot, config.DefaultStorageDir, config.DefaultDBFile)
+	database, err := db.Open(dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening database: %w", err)
+	}
+	if err := db.CheckSchemaVersion(database); err != nil {
+		_ = database.Close()
+		return nil, nil, err
+	}
+	s := store.New(database)
+	cleanup := func() { _ = database.Close() }
+	return s, cleanup, nil
+}
+
+func indexCmd() *cobra.Command {
+	var flagSince string
+	var flagStrict bool
+
+	cmd := &cobra.Command{
+		Use:   "index",
+		Short: "Index the repository",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := repo.FindRoot(flagRepo, "")
+			if err != nil {
+				return fmt.Errorf("finding repo root: %w", err)
+			}
+
+			cfg, err := config.LoadFromDir(repoRoot)
+			if err != nil {
+				return fmt.Errorf("loading config: %w", err)
+			}
+
+			s, cleanup, err := openDB(repoRoot)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			mode := "full"
+			if flagSince != "" {
+				mode = "incremental"
+			}
+
+			idx := indexer.New(repoRoot, cfg, s)
+			result, err := idx.Run(mode, flagSince)
+			if err != nil {
+				return err
+			}
+
+			if flagStrict && idx.Diag.HasErrors() {
+				return fmt.Errorf("strict mode: %d errors encountered", idx.Diag.ErrorCount())
+			}
+
+			f := output.New(os.Stdout, outputMode())
+			if outputMode() == output.ModeText {
+				return f.WriteText([]output.KV{
+					{Key: "Status", Value: result.Status},
+					{Key: "Files scanned", Value: fmt.Sprintf("%d", result.FilesScanned)},
+					{Key: "Files changed", Value: fmt.Sprintf("%d", result.FilesChanged)},
+					{Key: "Files new", Value: fmt.Sprintf("%d", result.FilesNew)},
+					{Key: "Files deleted", Value: fmt.Sprintf("%d", result.FilesDeleted)},
+				})
+			}
+			return f.Write(result)
+		},
+	}
+	cmd.Flags().StringVar(&flagSince, "since", "", "Only index files changed since this Git revision")
+	cmd.Flags().BoolVar(&flagStrict, "strict", false, "Fail on any error diagnostic")
+	return cmd
+}
+
+func reindexCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reindex",
+		Short: "Reindex the repository from scratch",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := repo.FindRoot(flagRepo, "")
+			if err != nil {
+				return fmt.Errorf("finding repo root: %w", err)
+			}
+
+			cfg, err := config.LoadFromDir(repoRoot)
+			if err != nil {
+				return fmt.Errorf("loading config: %w", err)
+			}
+
+			s, cleanup, err := openDB(repoRoot)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			idx := indexer.New(repoRoot, cfg, s)
+			if err := idx.ClearAll(); err != nil {
+				return fmt.Errorf("clearing data: %w", err)
+			}
+
+			result, err := idx.Run("full", "")
+			if err != nil {
+				return err
+			}
+
+			f := output.New(os.Stdout, outputMode())
+			if outputMode() == output.ModeText {
+				return f.WriteText([]output.KV{
+					{Key: "Status", Value: result.Status},
+					{Key: "Files scanned", Value: fmt.Sprintf("%d", result.FilesScanned)},
+					{Key: "Files changed", Value: fmt.Sprintf("%d", result.FilesChanged)},
+				})
+			}
+			return f.Write(result)
 		},
 	}
 }
