@@ -41,7 +41,12 @@ func TestHookInstallPreservesExisting(t *testing.T) {
 		"permissions": map[string]any{"allow": []any{"Read", "Write"}},
 		"hooks": map[string]any{
 			"PostToolUse": []any{
-				map[string]any{"matcher": "Edit", "command": "echo done", "timeout": 5000.0},
+				map[string]any{
+					"matcher": "Edit",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "echo done", "timeout": 5000.0},
+					},
+				},
 			},
 		},
 	}

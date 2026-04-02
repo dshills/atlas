@@ -79,6 +79,24 @@ func saveSettings(path string, settings map[string]any) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+// matcherContainsAtlasHook checks if a matcher entry's hooks array contains the atlas command.
+func matcherContainsAtlasHook(entry map[string]any) bool {
+	hooksArr, ok := entry["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, h := range hooksArr {
+		hookObj, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cmd, ok := hookObj["command"].(string); ok && cmd == hookCommand {
+			return true
+		}
+	}
+	return false
+}
+
 func hasAtlasHook(settings map[string]any) bool {
 	hooks, ok := settings["hooks"]
 	if !ok {
@@ -92,16 +110,16 @@ func hasAtlasHook(settings map[string]any) bool {
 	if !ok {
 		return false
 	}
-	hookList, ok := preToolUse.([]any)
+	matcherList, ok := preToolUse.([]any)
 	if !ok {
 		return false
 	}
-	for _, h := range hookList {
-		hookObj, ok := h.(map[string]any)
+	for _, entry := range matcherList {
+		entryMap, ok := entry.(map[string]any)
 		if !ok {
 			continue
 		}
-		if cmd, ok := hookObj["command"].(string); ok && cmd == hookCommand {
+		if matcherContainsAtlasHook(entryMap) {
 			return true
 		}
 	}
@@ -120,23 +138,28 @@ func addAtlasHook(settings map[string]any) {
 		settings["hooks"] = hooksMap
 	}
 
-	newHook := map[string]any{
+	newEntry := map[string]any{
 		"matcher": "Bash",
-		"command": hookCommand,
-		"timeout": float64(hookTimeout),
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": hookCommand,
+				"timeout": float64(hookTimeout),
+			},
+		},
 	}
 
 	preToolUse, ok := hooksMap["PreToolUse"]
 	if !ok {
-		hooksMap["PreToolUse"] = []any{newHook}
+		hooksMap["PreToolUse"] = []any{newEntry}
 		return
 	}
-	hookList, ok := preToolUse.([]any)
+	matcherList, ok := preToolUse.([]any)
 	if !ok {
-		hooksMap["PreToolUse"] = []any{newHook}
+		hooksMap["PreToolUse"] = []any{newEntry}
 		return
 	}
-	hooksMap["PreToolUse"] = append(hookList, newHook)
+	hooksMap["PreToolUse"] = append(matcherList, newEntry)
 }
 
 func removeAtlasHook(settings map[string]any) bool {
@@ -152,24 +175,24 @@ func removeAtlasHook(settings map[string]any) bool {
 	if !ok {
 		return false
 	}
-	hookList, ok := preToolUse.([]any)
+	matcherList, ok := preToolUse.([]any)
 	if !ok {
 		return false
 	}
 
 	var filtered []any
 	removed := false
-	for _, h := range hookList {
-		hookObj, ok := h.(map[string]any)
+	for _, entry := range matcherList {
+		entryMap, ok := entry.(map[string]any)
 		if !ok {
-			filtered = append(filtered, h)
+			filtered = append(filtered, entry)
 			continue
 		}
-		if cmd, ok := hookObj["command"].(string); ok && cmd == hookCommand {
+		if matcherContainsAtlasHook(entryMap) {
 			removed = true
 			continue
 		}
-		filtered = append(filtered, h)
+		filtered = append(filtered, entry)
 	}
 
 	if len(filtered) == 0 {
