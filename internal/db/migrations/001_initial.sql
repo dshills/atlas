@@ -53,9 +53,9 @@ CREATE TABLE IF NOT EXISTS symbols (
     stable_id TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    FOREIGN KEY(file_id) REFERENCES files(id),
-    FOREIGN KEY(package_id) REFERENCES packages(id),
-    FOREIGN KEY(parent_symbol_id) REFERENCES symbols(id)
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE,
+    FOREIGN KEY(package_id) REFERENCES packages(id) ON DELETE SET NULL,
+    FOREIGN KEY(parent_symbol_id) REFERENCES symbols(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS "references" (

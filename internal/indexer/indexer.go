@@ -118,6 +118,15 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 			ParseStatus:     parseStatus,
 		}
 
+		// For existing files, run invalidation cascade before re-extraction
+		if _, exists := existingHashes[c.Path]; exists {
+			if existingID, ok := existingPaths[c.Path]; ok {
+				if err := idx.invalidateFile(existingID); err != nil {
+					idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("invalidation failed for %s: %v", c.Path, err))
+				}
+			}
+		}
+
 		fileID, err := idx.Store.UpsertFile(fileRow)
 		if err != nil {
 			idx.Diag.Add(diag.Diagnostic{
@@ -166,6 +175,11 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 				result.FilesDeleted++
 			}
 		}
+	}
+
+	// Cross-file reference resolution (Step 8)
+	if err := idx.resolveReferences(); err != nil {
+		idx.Diag.AddError(diag.CodeOrphanedReference, fmt.Sprintf("reference resolution failed: %v", err))
 	}
 
 	if err := idx.Store.PersistDiagnostics(runID, idx.Diag.All()); err != nil {
