@@ -268,6 +268,13 @@ func (idx *Indexer) extractAndPersist(ext extractor.Extractor, c fswalk.FileCand
 		refCount = n
 	}
 
+	// Persist artifacts
+	if len(res.Artifacts) > 0 {
+		if _, err := idx.Store.UpsertArtifacts(fileID, res.Artifacts); err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to persist artifacts for %s: %v", c.Path, err))
+		}
+	}
+
 	return symCount, refCount, parseStatus
 }
 

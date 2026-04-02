@@ -87,6 +87,38 @@ func (g *GoExtractor) Extract(ctx context.Context, req extractor.ExtractRequest)
 		}
 	}
 
+	// Extract calls
+	callRefs := extractCalls(fset, file, pkgName)
+	result.References = append(result.References, callRefs...)
+
+	// Extract interface implementations
+	implRefs := extractImplements(fset, file, pkgName)
+	result.References = append(result.References, implRefs...)
+
+	// Extract routes
+	routeArtifacts, routeRefs := extractRoutes(fset, file)
+	result.Artifacts = append(result.Artifacts, routeArtifacts...)
+	result.References = append(result.References, routeRefs...)
+
+	// Extract config/env access
+	configArtifacts, configRefs := extractConfigAccess(fset, file)
+	result.Artifacts = append(result.Artifacts, configArtifacts...)
+	result.References = append(result.References, configRefs...)
+
+	// Extract SQL artifacts
+	sqlArtifacts, sqlRefs := extractSQLArtifacts(fset, file, req.FilePath)
+	result.Artifacts = append(result.Artifacts, sqlArtifacts...)
+	result.References = append(result.References, sqlRefs...)
+
+	// Extract background jobs and external services
+	jobArtifacts, jobRefs := extractJobsAndServices(fset, file)
+	result.Artifacts = append(result.Artifacts, jobArtifacts...)
+	result.References = append(result.References, jobRefs...)
+
+	// Extract test references
+	testRefs := extractTestReferences(result.Symbols, pkgName)
+	result.References = append(result.References, testRefs...)
+
 	return result, nil
 }
 

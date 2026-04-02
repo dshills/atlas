@@ -120,13 +120,14 @@ func main() {
 }
 `
 	result := extract(t, "main.go", src)
-	if len(result.References) != 2 {
-		t.Errorf("expected 2 import references, got %d", len(result.References))
-	}
+	importCount := 0
 	for _, ref := range result.References {
-		if ref.ReferenceKind != "imports" {
-			t.Errorf("expected reference kind 'imports', got %q", ref.ReferenceKind)
+		if ref.ReferenceKind == "imports" {
+			importCount++
 		}
+	}
+	if importCount != 2 {
+		t.Errorf("expected 2 import references, got %d", importCount)
 	}
 }
 
