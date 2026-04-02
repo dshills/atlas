@@ -16,6 +16,9 @@ go.work.sum
 # Atlas local data
 .atlas/
 
+# Claude Code local settings
+.claude/
+
 # IDE and editor files
 .idea/
 .vscode/
