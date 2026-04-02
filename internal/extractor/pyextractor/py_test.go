@@ -200,6 +200,115 @@ def get_user(id):
 	}
 }
 
+func TestExtract_FullPipeline(t *testing.T) {
+	ext := New()
+	content := `import os
+from flask import Flask
+
+app = Flask(__name__)
+
+# @app.route('/hidden')
+
+@app.get('/users')
+def list_users():
+    pass
+
+db_url = os.getenv('DATABASE_URL')
+
+query = "SELECT * FROM users WHERE active = true"
+
+requests.get('https://api.example.com/data')
+
+asyncio.create_task(worker())
+
+def test_list_users():
+    process_data(items)
+    service.get_data()
+`
+
+	req := extractor.ExtractRequest{
+		FilePath: "tests/test_routes.py",
+		Content:  []byte(content),
+	}
+
+	result, err := ext.Extract(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Count references by kind
+	refKinds := make(map[string]int)
+	for _, ref := range result.References {
+		refKinds[ref.ReferenceKind]++
+	}
+
+	// Count artifacts by kind
+	artKinds := make(map[string]int)
+	for _, art := range result.Artifacts {
+		artKinds[art.ArtifactKind]++
+	}
+
+	// Assert at least one reference of each expected kind
+	expectedRefKinds := []string{
+		"imports",
+		"registers_route",
+		"uses_config",
+		"touches_table",
+		"invokes_external_api",
+		"calls",
+		"tests",
+	}
+	for _, kind := range expectedRefKinds {
+		if refKinds[kind] < 1 {
+			t.Errorf("expected at least 1 reference of kind %q, got %d", kind, refKinds[kind])
+		}
+	}
+
+	// Assert at least one artifact of each expected kind
+	expectedArtKinds := []string{
+		"route",
+		"env_var",
+		"sql_query",
+		"external_service",
+		"background_job",
+	}
+	for _, kind := range expectedArtKinds {
+		if artKinds[kind] < 1 {
+			t.Errorf("expected at least 1 artifact of kind %q, got %d", kind, artKinds[kind])
+		}
+	}
+
+	// Assert comment line did NOT produce references
+	// The comment is on line 6: "# @app.route('/hidden')"
+	for _, ref := range result.References {
+		if ref.ReferenceKind == "registers_route" && strings.Contains(ref.RawTargetText, "/hidden") {
+			t.Error("comment line should not produce a registers_route reference for /hidden")
+		}
+	}
+	for _, art := range result.Artifacts {
+		if art.ArtifactKind == "route" && strings.Contains(art.Name, "/hidden") {
+			t.Error("comment line should not produce a route artifact for /hidden")
+		}
+	}
+
+	// Assert all artifacts have non-empty DataJSON
+	for _, art := range result.Artifacts {
+		if art.DataJSON == "" {
+			t.Errorf("artifact %q (kind %s) has empty DataJSON", art.Name, art.ArtifactKind)
+		}
+	}
+
+	// Assert all references have non-empty ReferenceKind and Confidence
+	for _, ref := range result.References {
+		if ref.ReferenceKind == "" {
+			t.Errorf("reference at line %d has empty ReferenceKind", ref.Line)
+		}
+		if ref.Confidence == "" {
+			t.Errorf("reference %q at line %d has empty Confidence", ref.ReferenceKind, ref.Line)
+		}
+	}
+}
+
 func TestPythonSupports(t *testing.T) {
 	ext := New()
 	cases := map[string]bool{
