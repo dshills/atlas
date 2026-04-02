@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dshills/atlas/internal/extractor"
+	"github.com/dshills/atlas/internal/extractor/commentfilter"
 )
 
 // JavaExtractor implements extractor.Extractor for Java files.
@@ -53,6 +54,35 @@ func (j *JavaExtractor) Extract(_ context.Context, req extractor.ExtractRequest)
 
 	result.References = append(result.References, extractImports(content)...)
 	result.Symbols = append(result.Symbols, extractSymbols(content, lines, moduleName)...)
+
+	// Comment filter for relationship extraction
+	codeLines := commentfilter.LineFilter(content, "java")
+
+	// Extract routes
+	routeRefs, routeArts := extractRoutes(content, lines, codeLines)
+	result.References = append(result.References, routeRefs...)
+	result.Artifacts = append(result.Artifacts, routeArts...)
+
+	// Extract config access
+	configRefs, configArts := extractConfigAccess(content, lines, codeLines)
+	result.References = append(result.References, configRefs...)
+	result.Artifacts = append(result.Artifacts, configArts...)
+
+	// Extract SQL artifacts
+	sqlRefs, sqlArts := extractSQLArtifacts(content, lines, req.FilePath, codeLines)
+	result.References = append(result.References, sqlRefs...)
+	result.Artifacts = append(result.Artifacts, sqlArts...)
+
+	// Extract services
+	svcRefs, svcArts := extractServices(content, lines, codeLines)
+	result.References = append(result.References, svcRefs...)
+	result.Artifacts = append(result.Artifacts, svcArts...)
+
+	// Extract calls
+	result.References = append(result.References, extractCalls(content, lines, codeLines, result.Symbols, moduleName)...)
+
+	// Extract test references
+	result.References = append(result.References, extractTestReferences(result.Symbols, moduleName)...)
 
 	return result, nil
 }
