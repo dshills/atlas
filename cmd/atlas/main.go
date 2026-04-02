@@ -63,6 +63,7 @@ func main() {
 		cli.SummarizeCmd(cliCtx, Version),
 		cli.DoctorCmd(cliCtx),
 		cli.ValidateCmd(cliCtx),
+		cli.ExportCmd(cliCtx),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
