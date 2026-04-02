@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dshills/atlas/internal/extractor"
+	"github.com/dshills/atlas/internal/extractor/commentfilter"
 )
 
 // RustExtractor implements extractor.Extractor for Rust files.
@@ -47,6 +48,22 @@ func (r *RustExtractor) Extract(_ context.Context, req extractor.ExtractRequest)
 
 	result.References = append(result.References, extractImports(content)...)
 	result.Symbols = append(result.Symbols, extractSymbols(content, lines, moduleName)...)
+
+	// Comment filter for relationship extraction
+	codeLines := commentfilter.LineFilter(content, "rust")
+
+	// Extract routes
+	routeRefs, routeArts := extractRoutes(content, lines, codeLines)
+	result.References = append(result.References, routeRefs...)
+	result.Artifacts = append(result.Artifacts, routeArts...)
+
+	// Extract config access
+	configRefs, configArts := extractConfigAccess(content, lines, codeLines)
+	result.References = append(result.References, configRefs...)
+	result.Artifacts = append(result.Artifacts, configArts...)
+
+	// Extract test references
+	result.References = append(result.References, extractTestReferences(result.Symbols, moduleName)...)
 
 	return result, nil
 }

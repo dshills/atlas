@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dshills/atlas/internal/extractor"
+	"github.com/dshills/atlas/internal/extractor/commentfilter"
 )
 
 // TSExtractor implements extractor.Extractor for TypeScript and JavaScript files.
@@ -66,6 +67,22 @@ func (t *TSExtractor) Extract(_ context.Context, req extractor.ExtractRequest) (
 	if isTestFile {
 		result.Symbols = append(result.Symbols, extractTestCalls(content, lines, moduleName, language)...)
 	}
+
+	// Comment filter for relationship extraction
+	codeLines := commentfilter.LineFilter(content, language)
+
+	// Extract routes
+	routeRefs, routeArts := extractRoutes(content, lines, codeLines)
+	result.References = append(result.References, routeRefs...)
+	result.Artifacts = append(result.Artifacts, routeArts...)
+
+	// Extract config access
+	configRefs, configArts := extractConfigAccess(content, lines, codeLines)
+	result.References = append(result.References, configRefs...)
+	result.Artifacts = append(result.Artifacts, configArts...)
+
+	// Extract test references
+	result.References = append(result.References, extractTestReferences(result.Symbols, moduleName)...)
 
 	return result, nil
 }
