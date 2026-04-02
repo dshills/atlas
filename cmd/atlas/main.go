@@ -12,6 +12,8 @@ import (
 	"github.com/dshills/atlas/internal/db"
 	"github.com/dshills/atlas/internal/extractor"
 	"github.com/dshills/atlas/internal/extractor/goextractor"
+	"github.com/dshills/atlas/internal/extractor/pyextractor"
+	"github.com/dshills/atlas/internal/extractor/rustextractor"
 	"github.com/dshills/atlas/internal/extractor/tsextractor"
 	"github.com/dshills/atlas/internal/indexer"
 	"github.com/dshills/atlas/internal/model"
@@ -200,7 +202,7 @@ func configCmd() *cobra.Command {
 					{Key: "Version", Value: fmt.Sprintf("%d", cfg.Version)},
 					{Key: "Repo root", Value: cfg.RepoRoot},
 					{Key: "Storage dir", Value: cfg.StorageDir},
-					{Key: "Languages", Value: fmt.Sprintf("go=%v typescript=%v javascript=%v", cfg.Languages.Go, cfg.Languages.TypeScript, cfg.Languages.JavaScript)},
+					{Key: "Languages", Value: fmt.Sprintf("go=%v typescript=%v javascript=%v python=%v rust=%v", cfg.Languages.Go, cfg.Languages.TypeScript, cfg.Languages.JavaScript, cfg.Languages.Python, cfg.Languages.Rust)},
 					{Key: "Max file size", Value: fmt.Sprintf("%d", cfg.Indexing.MaxFileSizeBytes)},
 					{Key: "Summaries", Value: fmt.Sprintf("enabled=%v file=%v package=%v symbol=%v", cfg.Summaries.Enabled, cfg.Summaries.File, cfg.Summaries.Package, cfg.Summaries.Symbol)},
 					{Key: "Output format", Value: cfg.Output.DefaultFormat},
@@ -215,6 +217,8 @@ func buildRegistry() *extractor.Registry {
 	reg := extractor.NewRegistry()
 	reg.Register(goextractor.New())
 	reg.Register(tsextractor.New())
+	reg.Register(pyextractor.New())
+	reg.Register(rustextractor.New())
 	return reg
 }
 

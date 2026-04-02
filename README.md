@@ -80,6 +80,8 @@ atlas list packages
 | Go | `go/parser` + `go/ast` | Full (functions, methods, structs, interfaces, types, consts, vars, fields, tests, benchmarks, entrypoints) | calls, implements, imports, embeds, tests, routes, config, SQL, jobs | routes, config keys, migrations, SQL queries, jobs, external services, env vars |
 | TypeScript | Regex/heuristic | Functions, classes, methods, interfaces, types, consts, vars, tests | imports | - |
 | JavaScript | Regex/heuristic | Functions, classes, methods, consts, vars, tests | imports | - |
+| Python | Regex/heuristic | Functions, classes, methods, consts, decorators, tests | imports | - |
+| Rust | Regex/heuristic | Functions, methods, structs, enums, traits, types, consts, modules, macros, tests | imports | - |
 
 Languages can be individually enabled/disabled in `.atlas/config.yaml`.
 
@@ -206,17 +208,26 @@ include:
   - "**/*.tsx"
   - "**/*.js"
   - "**/*.jsx"
+  - "**/*.py"
+  - "**/*.pyi"
+  - "**/*.rs"
 
 exclude:
   - "vendor/**"
   - "node_modules/**"
   - ".git/**"
   - "testdata/**"
+  - "__pycache__/**"
+  - "target/**"
+  - ".venv/**"
+  - "venv/**"
 
 languages:
   go: true
   typescript: true
   javascript: true
+  python: true
+  rust: true
 
 indexing:
   max_file_size_bytes: 1048576    # 1 MiB

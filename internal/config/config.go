@@ -26,6 +26,8 @@ type LanguageConfig struct {
 	Go         bool `yaml:"go"         json:"go"`
 	TypeScript bool `yaml:"typescript" json:"typescript"`
 	JavaScript bool `yaml:"javascript" json:"javascript"`
+	Python     bool `yaml:"python"     json:"python"`
+	Rust       bool `yaml:"rust"       json:"rust"`
 }
 
 // IndexingConfig controls indexing behavior.
