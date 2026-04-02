@@ -65,6 +65,7 @@ func main() {
 		cli.DoctorCmd(cliCtx),
 		cli.ValidateCmd(cliCtx),
 		cli.ExportCmd(cliCtx),
+		cli.HookCmd(cliCtx),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

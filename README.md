@@ -142,6 +142,9 @@ Summaries are deterministic aggregations of indexed data (not LLM-generated). Th
 | `atlas doctor` | Run 8 health checks (storage, DB, schema, manifest, runs, stale summaries, missing files, SQLite integrity) |
 | `atlas validate` | Run 12 integrity checks (FK violations, orphaned symbols, stale summaries, denormalized field consistency, length constraints) |
 | `atlas validate --strict` | Additionally check that all files matching include globs are indexed |
+| `atlas hook install` | Install Claude Code PreToolUse hook for automatic re-indexing |
+| `atlas hook uninstall` | Remove the Claude Code hook |
+| `atlas hook status` | Check if the hook is installed |
 
 ### Export
 
@@ -255,11 +258,19 @@ Atlas is designed to be a backend for AI coding agents. The `--agent` flag produ
 
 ### Agent Setup
 
-Add Atlas initialization to your agent's setup or project instructions:
-
 ```bash
 # One-time setup in a repository
 atlas init && atlas index
+
+# Install Claude Code hook for automatic re-indexing
+atlas hook install
+```
+
+The `atlas hook install` command adds a `PreToolUse` hook to `.claude/settings.json` that runs `atlas index` before each Bash command. This keeps the index fresh as Claude makes changes — no manual re-indexing needed.
+
+```bash
+atlas hook status      # Check if hook is installed
+atlas hook uninstall   # Remove the hook
 ```
 
 ### Recommended Agent Workflow
