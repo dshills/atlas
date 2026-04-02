@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dshills/atlas/internal/extractor"
+	"github.com/dshills/atlas/internal/extractor/commentfilter"
 )
 
 // LuaExtractor implements extractor.Extractor for Lua files.
@@ -32,16 +33,13 @@ func (l *LuaExtractor) Extract(_ context.Context, req extractor.ExtractRequest) 
 	content := string(req.Content)
 	lines := strings.Split(content, "\n")
 
-	// Module name derived from file path: replace separators with dots, strip extension.
+	// Module name from file path
 	moduleName := deriveModuleName(req.FilePath)
-
-	// Package name is the file base name without extension.
-	pkgName := strings.TrimSuffix(filepath.Base(req.FilePath), filepath.Ext(req.FilePath))
 
 	result := &extractor.ExtractResult{
 		File: &extractor.FileRecord{ParseStatus: "ok"},
 		Package: &extractor.PackageRecord{
-			Name:          pkgName,
+			Name:          filepath.Base(strings.TrimSuffix(req.FilePath, filepath.Ext(req.FilePath))),
 			ImportPath:    moduleName,
 			DirectoryPath: filepath.Dir(req.FilePath),
 			Language:      "lua",
@@ -51,48 +49,68 @@ func (l *LuaExtractor) Extract(_ context.Context, req extractor.ExtractRequest) 
 	result.References = append(result.References, extractImports(content)...)
 	result.Symbols = append(result.Symbols, extractSymbols(content, lines, moduleName)...)
 
+	// Comment filter for relationship extraction
+	codeLines := commentfilter.LineFilter(content, "lua")
+
+	// Extract routes
+	routeRefs, routeArts := extractRoutes(content, lines, codeLines)
+	result.References = append(result.References, routeRefs...)
+	result.Artifacts = append(result.Artifacts, routeArts...)
+
+	// Extract config access
+	configRefs, configArts := extractConfigAccess(content, lines, codeLines)
+	result.References = append(result.References, configRefs...)
+	result.Artifacts = append(result.Artifacts, configArts...)
+
+	// Extract SQL artifacts
+	sqlRefs, sqlArts := extractSQLArtifacts(content, lines, req.FilePath, codeLines)
+	result.References = append(result.References, sqlRefs...)
+	result.Artifacts = append(result.Artifacts, sqlArts...)
+
+	// Extract services
+	svcRefs, svcArts := extractServices(content, lines, codeLines)
+	result.References = append(result.References, svcRefs...)
+	result.Artifacts = append(result.Artifacts, svcArts...)
+
+	// Extract calls
+	result.References = append(result.References, extractCalls(content, lines, codeLines, result.Symbols, moduleName)...)
+
+	// Extract test references
+	result.References = append(result.References, extractTestReferences(result.Symbols, moduleName)...)
+
 	return result, nil
 }
 
-// deriveModuleName converts a file path to a Lua module name using dot separators.
-// E.g., "src/utils/helpers.lua" -> "src.utils.helpers"
-func deriveModuleName(filePath string) string {
-	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))
-	// Normalize separators to dots.
-	name = strings.ReplaceAll(name, string(filepath.Separator), ".")
-	// Also handle forward slashes in case paths use them on any OS.
-	name = strings.ReplaceAll(name, "/", ".")
-	return name
+func deriveModuleName(path string) string {
+	// init.lua uses parent directory name, similar to Rust's mod.rs
+	base := filepath.Base(path)
+	if base == "init.lua" {
+		dir := filepath.Dir(path)
+		if dir == "." || dir == "" {
+			return "init"
+		}
+		return strings.ReplaceAll(dir, string(filepath.Separator), ".")
+	}
+	name := strings.TrimSuffix(path, filepath.Ext(path))
+	return strings.ReplaceAll(name, string(filepath.Separator), ".")
 }
 
 // Regex patterns for Lua extraction.
 var (
-	requireRe = regexp.MustCompile(`(?m)(?:local\s+\w+\s*=\s*)?require\s*\(?["']([^"']+)["']\)?`)
-
-	funcDeclRe   = regexp.MustCompile(`(?m)^(?:local\s+)?function\s+(\w+(?:\.\w+)*)\s*\(`)
-	funcAssignRe = regexp.MustCompile(`(?m)^(?:local\s+)?(\w+(?:\.\w+)*)\s*=\s*function\s*\(`)
-	methodDeclRe = regexp.MustCompile(`(?m)^function\s+(\w+):(\w+)\s*\(`)
-	localVarRe   = regexp.MustCompile(`(?m)^local\s+(\w+)\s*=`)
-	moduleVarRe  = regexp.MustCompile(`(?m)^(\w+)\s*=\s*\S`)
-
-	testFuncRe   = regexp.MustCompile(`(?m)^(?:local\s+)?function\s+(test\w+)\s*\(`)
-	bustedDescRe = regexp.MustCompile(`(?m)describe\s*\(\s*['"]([^'"]+)['"]`)
-	bustedItRe   = regexp.MustCompile(`(?m)it\s*\(\s*['"]([^'"]+)['"]`)
-
-	// Block-opening keywords for findBlockEnd.
-	blockOpenRe = regexp.MustCompile(`\b(function|if|for|while|repeat)\b`)
-	// Bare "do" at the start of a line (optional whitespace before it).
-	bareDoRe = regexp.MustCompile(`(?m)^\s*do\b`)
-	// Block-closing keywords.
-	blockEndRe   = regexp.MustCompile(`\bend\b`)
-	blockUntilRe = regexp.MustCompile(`\buntil\b`)
+	requireRe    = regexp.MustCompile(`(?m)require\s*[\("]\s*['"]?([^'")\s]+)['"]?\s*\)?`)
+	globalFuncRe = regexp.MustCompile(`(?m)^function\s+(\w+)\s*\(`)
+	localFuncRe  = regexp.MustCompile(`(?m)^local\s+function\s+(\w+)\s*\(`)
+	methodDeclRe = regexp.MustCompile(`(?m)^function\s+(\w+)[.:](\w+)\s*\(`)
+	localVarRe   = regexp.MustCompile(`(?m)^local\s+([A-Z_][A-Z0-9_]*)\s*=`)
+	bustedDescRe = regexp.MustCompile(`(?m)^\s*describe\s*\(\s*["']`)
+	bustedItRe   = regexp.MustCompile(`(?m)^\s*it\s*\(\s*["']([^"']+)["']`)
 )
 
 func extractImports(content string) []extractor.ReferenceRecord {
 	var refs []extractor.ReferenceRecord
 	matches := requireRe.FindAllStringSubmatchIndex(content, -1)
 	for _, m := range matches {
-		importPath := strings.TrimSpace(content[m[2]:m[3]])
+		importPath := content[m[2]:m[3]]
 		line := strings.Count(content[:m[0]], "\n") + 1
 		refs = append(refs, extractor.ReferenceRecord{
 			ToSymbolName:  importPath,
@@ -108,50 +126,68 @@ func extractImports(content string) []extractor.ReferenceRecord {
 func extractSymbols(content string, lines []string, moduleName string) []extractor.SymbolRecord {
 	var symbols []extractor.SymbolRecord
 
-	// Track lines that have require calls to avoid counting as vars.
-	requireLines := make(map[int]bool)
-	for _, m := range requireRe.FindAllStringIndex(content, -1) {
+	isTestFile := isTestFilePath(filepath.Base(moduleName))
+
+	// Global functions: function name(...)
+	for _, m := range globalFuncRe.FindAllStringSubmatchIndex(content, -1) {
+		name := content[m[2]:m[3]]
 		line := strings.Count(content[:m[0]], "\n") + 1
-		requireLines[line] = true
+
+		// Skip if this is actually a method declaration (name.method or name:method)
+		if methodDeclRe.MatchString(lines[line-1]) {
+			continue
+		}
+
+		kind := "function"
+		if isTestFile && (strings.HasPrefix(name, "test") || strings.HasPrefix(name, "Test")) {
+			kind = "test"
+		}
+
+		qname := moduleName + "." + name
+		stableID := "lua:" + qname + ":" + kind
+
+		symbols = append(symbols, extractor.SymbolRecord{
+			Name:          name,
+			QualifiedName: qname,
+			SymbolKind:    kind,
+			Visibility:    "exported",
+			StartLine:     line,
+			EndLine:       findBlockEnd(lines, line-1),
+			StableID:      stableID,
+		})
 	}
 
-	// Track lines that have function assignments to avoid double-counting as vars.
-	funcAssignLines := make(map[int]bool)
-	for _, m := range funcAssignRe.FindAllStringIndex(content, -1) {
+	// Local functions: local function name(...)
+	for _, m := range localFuncRe.FindAllStringSubmatchIndex(content, -1) {
+		name := content[m[2]:m[3]]
 		line := strings.Count(content[:m[0]], "\n") + 1
-		funcAssignLines[line] = true
+
+		kind := "function"
+		if isTestFile && (strings.HasPrefix(name, "test") || strings.HasPrefix(name, "Test")) {
+			kind = "test"
+		}
+
+		qname := moduleName + "." + name
+		stableID := "lua:" + qname + ":" + kind
+
+		symbols = append(symbols, extractor.SymbolRecord{
+			Name:          name,
+			QualifiedName: qname,
+			SymbolKind:    kind,
+			Visibility:    "unexported",
+			StartLine:     line,
+			EndLine:       findBlockEnd(lines, line-1),
+			StableID:      stableID,
+		})
 	}
 
-	// Track lines that are method declarations to avoid funcDeclRe matching them.
-	methodDeclLines := make(map[int]bool)
-	for _, m := range methodDeclRe.FindAllStringIndex(content, -1) {
-		line := strings.Count(content[:m[0]], "\n") + 1
-		methodDeclLines[line] = true
-	}
-
-	// Track lines that have test functions to mark them as "test" kind.
-	testFuncLines := make(map[int]bool)
-	for _, m := range testFuncRe.FindAllStringIndex(content, -1) {
-		line := strings.Count(content[:m[0]], "\n") + 1
-		testFuncLines[line] = true
-	}
-
-	// Track lines that have funcDeclRe to avoid double-counting as vars.
-	funcDeclLines := make(map[int]bool)
-	for _, m := range funcDeclRe.FindAllStringIndex(content, -1) {
-		line := strings.Count(content[:m[0]], "\n") + 1
-		funcDeclLines[line] = true
-	}
-
-	// Method declarations: function ClassName:methodName(
+	// Method declarations: function Obj.method(...) or function Obj:method(...)
 	for _, m := range methodDeclRe.FindAllStringSubmatchIndex(content, -1) {
-		className := content[m[2]:m[3]]
+		receiver := content[m[2]:m[3]]
 		methodName := content[m[4]:m[5]]
 		line := strings.Count(content[:m[0]], "\n") + 1
-		endLine := findBlockEnd(lines, line-1)
 
-		parentID := moduleName + "." + className
-		qname := moduleName + "." + className + ":" + methodName
+		qname := moduleName + "." + receiver + "." + methodName
 		stableID := "lua:" + qname + ":method"
 
 		symbols = append(symbols, extractor.SymbolRecord{
@@ -159,110 +195,25 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 			QualifiedName:  qname,
 			SymbolKind:     "method",
 			Visibility:     "exported",
-			ParentSymbolID: parentID,
+			ParentSymbolID: moduleName + "." + receiver,
 			StartLine:      line,
-			EndLine:        endLine,
+			EndLine:        findBlockEnd(lines, line-1),
 			StableID:       stableID,
 		})
 	}
 
-	// Named function declarations: [local] function name(
-	for _, m := range funcDeclRe.FindAllStringSubmatchIndex(content, -1) {
-		fullName := content[m[2]:m[3]]
-		line := strings.Count(content[:m[0]], "\n") + 1
-
-		// Skip lines that are method declarations (matched by methodDeclRe).
-		if methodDeclLines[line] {
-			continue
-		}
-
-		endLine := findBlockEnd(lines, line-1)
-		lineContent := lines[line-1]
-
-		kind := "function"
-		if testFuncLines[line] {
-			kind = "test"
-		}
-
-		// Determine name and parent from dotted name.
-		name := fullName
-		parentID := ""
-		if idx := strings.LastIndex(fullName, "."); idx >= 0 {
-			name = fullName[idx+1:]
-			parentID = moduleName + "." + fullName[:idx]
-		}
-
-		qname := moduleName + "." + fullName
-		stableID := "lua:" + qname + ":" + kind
-		vis := "exported"
-		if strings.HasPrefix(strings.TrimSpace(lineContent), "local") {
-			vis = "unexported"
-		}
-
-		symbols = append(symbols, extractor.SymbolRecord{
-			Name:           name,
-			QualifiedName:  qname,
-			SymbolKind:     kind,
-			Visibility:     vis,
-			ParentSymbolID: parentID,
-			StartLine:      line,
-			EndLine:        endLine,
-			StableID:       stableID,
-		})
-	}
-
-	// Function assignments: [local] name = function(
-	for _, m := range funcAssignRe.FindAllStringSubmatchIndex(content, -1) {
-		fullName := content[m[2]:m[3]]
-		line := strings.Count(content[:m[0]], "\n") + 1
-		endLine := findBlockEnd(lines, line-1)
-		lineContent := lines[line-1]
-
-		// Determine name and parent from dotted name.
-		name := fullName
-		parentID := ""
-		if idx := strings.LastIndex(fullName, "."); idx >= 0 {
-			name = fullName[idx+1:]
-			parentID = moduleName + "." + fullName[:idx]
-		}
-
-		kind := "function"
-		qname := moduleName + "." + fullName
-		stableID := "lua:" + qname + ":" + kind
-		vis := "exported"
-		if strings.HasPrefix(strings.TrimSpace(lineContent), "local") {
-			vis = "unexported"
-		}
-
-		symbols = append(symbols, extractor.SymbolRecord{
-			Name:           name,
-			QualifiedName:  qname,
-			SymbolKind:     kind,
-			Visibility:     vis,
-			ParentSymbolID: parentID,
-			StartLine:      line,
-			EndLine:        endLine,
-			StableID:       stableID,
-		})
-	}
-
-	// Local variables: local name =
+	// Local constants (ALL_CAPS)
 	for _, m := range localVarRe.FindAllStringSubmatchIndex(content, -1) {
 		name := content[m[2]:m[3]]
 		line := strings.Count(content[:m[0]], "\n") + 1
 
-		// Skip if this line is a function assignment, function declaration, or require.
-		if funcAssignLines[line] || funcDeclLines[line] || requireLines[line] {
-			continue
-		}
-
 		qname := moduleName + "." + name
-		stableID := "lua:" + qname + ":var"
+		stableID := "lua:" + qname + ":const"
 
 		symbols = append(symbols, extractor.SymbolRecord{
 			Name:          name,
 			QualifiedName: qname,
-			SymbolKind:    "var",
+			SymbolKind:    "const",
 			Visibility:    "unexported",
 			StartLine:     line,
 			EndLine:       line,
@@ -270,115 +221,87 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 		})
 	}
 
-	// Module-level variables: name = (not local, not function)
-	seenModuleVars := make(map[string]bool)
-	for _, m := range moduleVarRe.FindAllStringSubmatchIndex(content, -1) {
-		name := content[m[2]:m[3]]
-		line := strings.Count(content[:m[0]], "\n") + 1
-		lineContent := lines[line-1]
+	// Busted test framework: it("description", function() ...)
+	if bustedDescRe.MatchString(content) {
+		for _, m := range bustedItRe.FindAllStringSubmatchIndex(content, -1) {
+			desc := content[m[2]:m[3]]
+			line := strings.Count(content[:m[0]], "\n") + 1
 
-		// Skip if the line starts with "local".
-		if strings.HasPrefix(strings.TrimSpace(lineContent), "local") {
-			continue
+			// Use description as name, sanitized
+			name := sanitizeTestName(desc)
+			qname := moduleName + "." + name
+			stableID := "lua:" + qname + ":test"
+
+			symbols = append(symbols, extractor.SymbolRecord{
+				Name:          name,
+				QualifiedName: qname,
+				SymbolKind:    "test",
+				Visibility:    "unexported",
+				StartLine:     line,
+				EndLine:       findBlockEnd(lines, line-1),
+				StableID:      stableID,
+			})
 		}
-		// Skip if this line is a function assignment, function declaration, or require.
-		if funcAssignLines[line] || funcDeclLines[line] || methodDeclLines[line] || requireLines[line] {
-			continue
-		}
-		// Deduplicate: only emit the first assignment for each module-level var.
-		if seenModuleVars[name] {
-			continue
-		}
-		seenModuleVars[name] = true
-
-		qname := moduleName + "." + name
-		stableID := "lua:" + qname + ":var"
-
-		symbols = append(symbols, extractor.SymbolRecord{
-			Name:          name,
-			QualifiedName: qname,
-			SymbolKind:    "var",
-			Visibility:    "exported",
-			StartLine:     line,
-			EndLine:       line,
-			StableID:      stableID,
-		})
-	}
-
-	// Busted describe blocks.
-	for _, m := range bustedDescRe.FindAllStringSubmatchIndex(content, -1) {
-		desc := content[m[2]:m[3]]
-		line := strings.Count(content[:m[0]], "\n") + 1
-
-		qname := moduleName + ".describe:" + desc
-		stableID := "lua:" + qname + ":test"
-
-		symbols = append(symbols, extractor.SymbolRecord{
-			Name:          "describe: " + desc,
-			QualifiedName: qname,
-			SymbolKind:    "test",
-			Visibility:    "exported",
-			StartLine:     line,
-			EndLine:       line,
-			StableID:      stableID,
-		})
-	}
-
-	// Busted it blocks.
-	for _, m := range bustedItRe.FindAllStringSubmatchIndex(content, -1) {
-		desc := content[m[2]:m[3]]
-		line := strings.Count(content[:m[0]], "\n") + 1
-
-		qname := moduleName + ".it:" + desc
-		stableID := "lua:" + qname + ":test"
-
-		symbols = append(symbols, extractor.SymbolRecord{
-			Name:          "it: " + desc,
-			QualifiedName: qname,
-			SymbolKind:    "test",
-			Visibility:    "exported",
-			StartLine:     line,
-			EndLine:       line,
-			StableID:      stableID,
-		})
 	}
 
 	return symbols
 }
 
-// findBlockEnd finds the closing "end" (or "until") for a Lua block starting at
-// the given line index (0-based). Lua uses keyword-based blocks instead of braces.
-//
-// Block-opening keywords: function, if, for, while, repeat
-// "do" only counts when it appears at the start of a line (bare do...end block).
-// Block-closing keywords: end, until (for repeat...until)
+func isTestFilePath(base string) bool {
+	lower := strings.ToLower(base)
+	return strings.HasPrefix(lower, "test") || strings.HasSuffix(lower, "_test") ||
+		strings.HasSuffix(lower, "_spec") || strings.Contains(lower, "test")
+}
+
+func sanitizeTestName(desc string) string {
+	// Replace spaces and special chars with underscores
+	var b strings.Builder
+	for _, r := range desc {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' {
+			b.WriteRune(r)
+		} else if r == ' ' {
+			b.WriteRune('_')
+		}
+	}
+	result := b.String()
+	if len(result) > 60 {
+		result = result[:60]
+	}
+	return result
+}
+
+// findBlockEnd finds the matching 'end' keyword for a block starting at the given line index.
+// Lua uses keyword-based blocks (function/if/for/while/repeat...end).
 func findBlockEnd(lines []string, startIdx int) int {
 	depth := 0
 	for i := startIdx; i < len(lines); i++ {
-		line := lines[i]
+		trimmed := strings.TrimSpace(lines[i])
 
-		// Count block-opening keywords on this line.
-		opens := blockOpenRe.FindAllStringIndex(line, -1)
-		depth += len(opens)
+		// Count block openers
+		depth += countBlockOpeners(trimmed)
 
-		// Count bare "do" at start of line.
-		if bareDoRe.MatchString(line) {
-			depth++
-		}
-
-		// Count block-closing "end" keywords.
-		ends := blockEndRe.FindAllStringIndex(line, -1)
-		depth -= len(ends)
-
-		// Count "until" keywords (closes repeat blocks).
-		untils := blockUntilRe.FindAllStringIndex(line, -1)
-		depth -= len(untils)
-
-		if depth <= 0 {
-			return i + 1 // 1-indexed
+		// Count block closers
+		if trimmed == "end" || strings.HasPrefix(trimmed, "end ") ||
+			strings.HasPrefix(trimmed, "end)") || strings.HasPrefix(trimmed, "end,") ||
+			strings.HasSuffix(trimmed, " end") || strings.HasSuffix(trimmed, ")end") {
+			depth--
+			if depth <= 0 {
+				return i + 1
+			}
 		}
 	}
-
-	// If we never found the closing keyword, return startIdx + 1 as a fallback.
 	return startIdx + 1
+}
+
+// countBlockOpeners counts how many block-opening keywords appear on a line.
+func countBlockOpeners(trimmed string) int {
+	count := 0
+	openers := []string{"function", "if ", "for ", "while ", "repeat"}
+	for _, op := range openers {
+		if strings.HasPrefix(trimmed, op) || strings.Contains(trimmed, " "+op) ||
+			strings.Contains(trimmed, "("+op) || strings.Contains(trimmed, "="+op) {
+			count++
+		}
+	}
+	return count
 }

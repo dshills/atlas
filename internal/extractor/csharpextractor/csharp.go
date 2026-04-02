@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dshills/atlas/internal/extractor"
+	"github.com/dshills/atlas/internal/extractor/commentfilter"
 )
 
 // CSharpExtractor implements extractor.Extractor for C# files.
@@ -25,17 +26,15 @@ func (c *CSharpExtractor) Supports(path string) bool {
 }
 
 func (c *CSharpExtractor) SupportedKinds() []string {
-	return []string{"namespace", "class", "interface", "enum", "struct", "method", "property", "field", "const", "record", "test"}
+	return []string{"namespace", "class", "interface", "enum", "struct", "method", "field", "const", "test"}
 }
 
 func (c *CSharpExtractor) Extract(_ context.Context, req extractor.ExtractRequest) (*extractor.ExtractResult, error) {
 	content := string(req.Content)
 	lines := strings.Split(content, "\n")
 
-	// Derive module name from namespace declaration, fallback to file path
 	moduleName := deriveModuleName(content, req.FilePath)
 
-	// Package name is the last segment of the dotted namespace path
 	pkgName := moduleName
 	if idx := strings.LastIndex(moduleName, "."); idx >= 0 {
 		pkgName = moduleName[idx+1:]
@@ -54,32 +53,58 @@ func (c *CSharpExtractor) Extract(_ context.Context, req extractor.ExtractReques
 	result.References = append(result.References, extractImports(content)...)
 	result.Symbols = append(result.Symbols, extractSymbols(content, lines, moduleName)...)
 
+	// Comment filter for relationship extraction
+	codeLines := commentfilter.LineFilter(content, "csharp")
+
+	// Extract routes
+	routeRefs, routeArts := extractRoutes(content, lines, codeLines)
+	result.References = append(result.References, routeRefs...)
+	result.Artifacts = append(result.Artifacts, routeArts...)
+
+	// Extract config access
+	configRefs, configArts := extractConfigAccess(content, lines, codeLines)
+	result.References = append(result.References, configRefs...)
+	result.Artifacts = append(result.Artifacts, configArts...)
+
+	// Extract SQL artifacts
+	sqlRefs, sqlArts := extractSQLArtifacts(content, lines, req.FilePath, codeLines)
+	result.References = append(result.References, sqlRefs...)
+	result.Artifacts = append(result.Artifacts, sqlArts...)
+
+	// Extract services
+	svcRefs, svcArts := extractServices(content, lines, codeLines)
+	result.References = append(result.References, svcRefs...)
+	result.Artifacts = append(result.Artifacts, svcArts...)
+
+	// Extract calls
+	result.References = append(result.References, extractCalls(content, lines, codeLines, result.Symbols, moduleName)...)
+
+	// Extract test references
+	result.References = append(result.References, extractTestReferences(result.Symbols, moduleName)...)
+
 	return result, nil
 }
 
 func deriveModuleName(content, filePath string) string {
-	m := namespaceDeclRe.FindStringSubmatch(content)
+	m := namespaceRe.FindStringSubmatch(content)
 	if m != nil {
 		return m[1]
 	}
-	// Fallback: file path without extension, separators replaced with dots
 	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))
 	return strings.ReplaceAll(name, string(filepath.Separator), ".")
 }
 
 // Regex patterns for C# extraction.
 var (
-	namespaceDeclRe = regexp.MustCompile(`(?m)^namespace\s+([\w.]+)`)
-	usingRe         = regexp.MustCompile(`(?m)^using\s+(?:static\s+)?([^;]+);`)
-	classDeclRe     = regexp.MustCompile(`(?m)^[ \t]*(?:public\s+|private\s+|protected\s+|internal\s+)?(?:static\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:partial\s+)?class\s+(\w+)`)
-	interfaceDeclRe = regexp.MustCompile(`(?m)^[ \t]*(?:public\s+|private\s+|protected\s+|internal\s+)?(?:partial\s+)?interface\s+(\w+)`)
-	enumDeclRe      = regexp.MustCompile(`(?m)^[ \t]*(?:public\s+|private\s+|protected\s+|internal\s+)?enum\s+(\w+)`)
-	structDeclRe    = regexp.MustCompile(`(?m)^[ \t]*(?:public\s+|private\s+|protected\s+|internal\s+)?(?:readonly\s+)?(?:partial\s+)?struct\s+(\w+)`)
-	recordDeclRe    = regexp.MustCompile(`(?m)^[ \t]*(?:public\s+|private\s+|protected\s+|internal\s+)?(?:sealed\s+)?record\s+(?:struct\s+|class\s+)?(\w+)`)
-	methodDeclRe    = regexp.MustCompile(`(?m)^[ \t]+(?:public\s+|private\s+|protected\s+|internal\s+)?(?:static\s+)?(?:virtual\s+|override\s+|abstract\s+|async\s+)?(?:\w+(?:<[^>]*>)?(?:\[\]|\?)?)\s+(\w+)\s*[(<]`)
-	constFieldRe    = regexp.MustCompile(`(?m)^[ \t]+(?:public\s+|private\s+|protected\s+|internal\s+)?const\s+\w+\s+(\w+)\s*=`)
-	propertyDeclRe  = regexp.MustCompile(`(?m)^[ \t]+(?:public\s+|private\s+|protected\s+|internal\s+)?(?:static\s+)?(?:virtual\s+|override\s+|abstract\s+)?(?:\w+(?:<[^>]*>)?(?:\[\]|\?)?)\s+(\w+)\s*\{`)
-	testAttrRe      = regexp.MustCompile(`(?m)\[(Test|Fact|Theory|TestMethod)\]\s*\n\s*(?:public\s+|private\s+)?(?:static\s+)?(?:async\s+)?(?:Task\s+|void\s+)(\w+)`)
+	namespaceRe  = regexp.MustCompile(`(?m)^namespace\s+([\w.]+)`)
+	usingRe      = regexp.MustCompile(`(?m)^using\s+(?:static\s+)?([^;]+);`)
+	classDeclRe  = regexp.MustCompile(`(?m)^(?:public\s+|private\s+|protected\s+|internal\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:static\s+)?(?:partial\s+)?class\s+(\w+)`)
+	interfaceRe  = regexp.MustCompile(`(?m)^(?:public\s+|private\s+|protected\s+|internal\s+)?(?:partial\s+)?interface\s+(\w+)`)
+	enumDeclRe   = regexp.MustCompile(`(?m)^(?:public\s+|private\s+|protected\s+|internal\s+)?enum\s+(\w+)`)
+	structDeclRe = regexp.MustCompile(`(?m)^(?:public\s+|private\s+|protected\s+|internal\s+)?(?:readonly\s+)?(?:partial\s+)?struct\s+(\w+)`)
+	methodDeclRe = regexp.MustCompile(`(?m)^\s+(?:public\s+|private\s+|protected\s+|internal\s+)?(?:static\s+)?(?:virtual\s+)?(?:override\s+)?(?:abstract\s+)?(?:async\s+)?(?:new\s+)?(?:\w+(?:<[^>]*>)?(?:\[\])*(?:\?)?)\s+(\w+)\s*\(`)
+	constFieldRe = regexp.MustCompile(`(?m)^\s+(?:public\s+|private\s+|protected\s+|internal\s+)?(?:static\s+)?(?:readonly\s+)?const\s+\w+\s+([A-Z_][A-Z0-9_]*)\s*=`)
+	testAttrRe   = regexp.MustCompile(`(?m)\[(?:Test|Fact|Theory|TestMethod)\s*(?:\([^)]*\))?\]\s*\n\s*(?:public\s+|private\s+|protected\s+)?(?:static\s+)?(?:async\s+)?(?:void\s+|Task\s+)(\w+)`)
 )
 
 func extractImports(content string) []extractor.ReferenceRecord {
@@ -102,16 +127,15 @@ func extractImports(content string) []extractor.ReferenceRecord {
 func extractSymbols(content string, lines []string, moduleName string) []extractor.SymbolRecord {
 	var symbols []extractor.SymbolRecord
 
-	// Collect test method lines from attribute-annotated tests
-	testMethodLines := make(map[int]string) // line number -> method name
+	// Collect test method lines for deduplication
+	testMethodLines := make(map[int]string)
 	testMatches := testAttrRe.FindAllStringSubmatchIndex(content, -1)
 	for _, m := range testMatches {
-		name := content[m[4]:m[5]]
-		methodLine := strings.Count(content[:m[4]], "\n") + 1
+		name := content[m[2]:m[3]]
+		methodLine := strings.Count(content[:m[2]], "\n") + 1
 		testMethodLines[methodLine] = name
 	}
 
-	// Type containers: classes, interfaces, enums, structs, records
 	type container struct {
 		name      string
 		kind      string
@@ -121,9 +145,19 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 	}
 	var containers []container
 
-	// Helper to extract type containers with a given regex and kind
-	extractContainers := func(re *regexp.Regexp, kind string) {
-		for _, m := range re.FindAllStringSubmatchIndex(content, -1) {
+	type declPattern struct {
+		re   *regexp.Regexp
+		kind string
+	}
+	patterns := []declPattern{
+		{classDeclRe, "class"},
+		{interfaceRe, "interface"},
+		{enumDeclRe, "enum"},
+		{structDeclRe, "struct"},
+	}
+
+	for _, pat := range patterns {
+		for _, m := range pat.re.FindAllStringSubmatchIndex(content, -1) {
 			name := content[m[2]:m[3]]
 			line := strings.Count(content[:m[0]], "\n") + 1
 			endLine := findBlockEnd(lines, line-1)
@@ -133,12 +167,12 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 			}
 
 			qname := moduleName + "." + name
-			stableID := "csharp:" + qname + ":" + kind
+			stableID := "csharp:" + qname + ":" + pat.kind
 
 			symbols = append(symbols, extractor.SymbolRecord{
 				Name:          name,
 				QualifiedName: qname,
-				SymbolKind:    kind,
+				SymbolKind:    pat.kind,
 				Visibility:    visibility(lineContent),
 				StartLine:     line,
 				EndLine:       endLine,
@@ -147,7 +181,7 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 
 			containers = append(containers, container{
 				name:      name,
-				kind:      kind,
+				kind:      pat.kind,
 				startLine: line,
 				endLine:   endLine,
 				qname:     qname,
@@ -155,16 +189,8 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 		}
 	}
 
-	extractContainers(classDeclRe, "class")
-	extractContainers(interfaceDeclRe, "interface")
-	extractContainers(enumDeclRe, "enum")
-	extractContainers(structDeclRe, "struct")
-	extractContainers(recordDeclRe, "record")
-
-	// Track which lines already have test symbols (for deduplication)
 	testSymbolLines := make(map[int]bool)
 
-	// Extract methods, properties, and constants within containers
 	for _, ct := range containers {
 		for i := ct.startLine; i < min(ct.endLine, len(lines)); i++ {
 			line := lines[i]
@@ -173,7 +199,6 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 				continue
 			}
 
-			// Check for constants
 			if cm := constFieldRe.FindStringSubmatch(line); cm != nil {
 				constName := cm[1]
 				qname := ct.qname + "." + constName
@@ -192,50 +217,28 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 				continue
 			}
 
-			// Check for properties (must check before methods since they overlap in pattern)
-			if pm := propertyDeclRe.FindStringSubmatch(line); pm != nil {
-				propName := pm[1]
-				propLine := i + 1
-
-				// Skip if this looks like a method line too (properties have '{', methods have '(')
-				// The propertyDeclRe requires '{' so this should be correct
-				qname := ct.qname + "." + propName
-				stableID := "csharp:" + qname + ":property"
-
-				symbols = append(symbols, extractor.SymbolRecord{
-					Name:           propName,
-					QualifiedName:  qname,
-					SymbolKind:     "property",
-					Visibility:     visibility(line),
-					ParentSymbolID: ct.qname,
-					StartLine:      propLine,
-					EndLine:        propLine,
-					StableID:       stableID,
-				})
-				continue
-			}
-
-			// Check for methods
 			if mm := methodDeclRe.FindStringSubmatch(line); mm != nil {
 				methodName := mm[1]
 				methodLine := i + 1
 
-				// Determine if this is a test method
 				kind := "method"
 
-				// Check test attribute annotations
+				// Check test attribute
 				if _, ok := testMethodLines[methodLine]; ok {
 					kind = "test"
 				}
 
-				// Check annotation on previous lines (look back up to 3 lines)
+				// Look back up to 3 lines for test attributes
 				if kind == "method" {
 					for j := i - 1; j >= 0 && j >= i-3; j-- {
 						prevTrimmed := strings.TrimSpace(lines[j])
 						if prevTrimmed == "" {
 							continue
 						}
-						if prevTrimmed == "[Test]" || prevTrimmed == "[Fact]" || prevTrimmed == "[Theory]" || prevTrimmed == "[TestMethod]" {
+						if strings.HasPrefix(prevTrimmed, "[Test") ||
+							strings.HasPrefix(prevTrimmed, "[Fact") ||
+							strings.HasPrefix(prevTrimmed, "[Theory") ||
+							strings.HasPrefix(prevTrimmed, "[TestMethod") {
 							kind = "test"
 							break
 						}
@@ -272,19 +275,14 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 	return symbols
 }
 
-// visibility determines if a declaration is exported (public/internal) or unexported.
 func visibility(line string) string {
 	trimmed := strings.TrimSpace(line)
-	if strings.Contains(trimmed, "public ") || strings.HasPrefix(trimmed, "public ") {
-		return "exported"
-	}
-	if strings.Contains(trimmed, "internal ") || strings.HasPrefix(trimmed, "internal ") {
+	if strings.HasPrefix(trimmed, "public") || strings.Contains(trimmed, "public ") {
 		return "exported"
 	}
 	return "unexported"
 }
 
-// findBlockEnd finds the closing brace for a block starting at the given line index.
 func findBlockEnd(lines []string, startIdx int) int {
 	depth := 0
 	for i := startIdx; i < len(lines); i++ {
