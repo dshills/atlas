@@ -78,16 +78,16 @@ atlas list packages
 | Language | Parser | Symbols | Relationships | Artifacts |
 |----------|--------|---------|---------------|-----------|
 | Go | `go/parser` + `go/ast` | Full (functions, methods, structs, interfaces, types, consts, vars, fields, tests, benchmarks, entrypoints) | calls, implements, imports, embeds, tests, routes, config, SQL, jobs | routes, config keys, migrations, SQL queries, jobs, external services, env vars |
-| TypeScript | Regex/heuristic | Functions, classes, methods, interfaces, types, consts, vars, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 | JavaScript | Regex/heuristic | Functions, classes, methods, consts, vars, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 | Python | Regex/heuristic | Functions, classes, methods, consts, decorators, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 | Rust | Regex/heuristic | Functions, methods, structs, enums, traits, types, consts, modules, macros, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
+| TypeScript | Regex/heuristic | Functions, classes, methods, interfaces, types, consts, vars, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 
 **Framework detection** for route and service extraction:
 
 | Language | Routes | HTTP Clients | Background Jobs |
 |----------|--------|-------------|-----------------|
-| TypeScript/JS | Express, NestJS, Next.js | fetch, axios, http | Worker, Bull/BullMQ |
+| JavaScript/TS | Express, NestJS, Next.js | fetch, axios, http | Worker, Bull/BullMQ |
 | Python | Flask, FastAPI, Django | requests, httpx, urllib | Celery, asyncio, threading, subprocess |
 | Rust | Actix-web, Rocket, Axum | reqwest, hyper, tonic | tokio::spawn, thread::spawn, rayon |
 
