@@ -90,3 +90,19 @@ All data lives in `.atlas/` under the repo root:
 - Extractors must return partial results with diagnostics on failure
 - Content-hash-based invalidation; if freshness is uncertain, mark stale
 - Go parsing uses standard library `go/parser` and `go/ast`
+
+## Atlas Index
+
+This repository has an Atlas index for structural and semantic code queries.
+Use atlas commands with --agent for compact JSON instead of reading source files:
+
+- `atlas find symbol <name> --agent` — find symbol definitions
+- `atlas who-calls <symbol> --agent` — find callers
+- `atlas calls <symbol> --agent` — find callees
+- `atlas implementations <interface> --agent` — find implementations
+- `atlas tests-for <symbol> --agent` — find related tests
+- `atlas summarize file <path> --agent` — get file summary
+- `atlas list routes --agent` — list HTTP routes
+- `atlas export graph --agent` — get full dependency graph
+
+The index auto-updates via a PreToolUse hook. To manually re-index: `atlas index`
