@@ -77,21 +77,29 @@ atlas list packages
 
 | Language | Parser | Symbols | Relationships | Artifacts |
 |----------|--------|---------|---------------|-----------|
+| C# | Regex/heuristic | Namespaces, classes, interfaces, enums, structs, records, methods, properties, consts, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 | Go | `go/parser` + `go/ast` | Full (functions, methods, structs, interfaces, types, consts, vars, fields, tests, benchmarks, entrypoints) | calls, implements, imports, embeds, tests, routes, config, SQL, jobs | routes, config keys, migrations, SQL queries, jobs, external services, env vars |
+| Java | Regex/heuristic | Packages, classes, interfaces, enums, methods, fields, consts, annotations, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 | JavaScript | Regex/heuristic | Functions, classes, methods, consts, vars, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
+| Lua | Regex/heuristic | Modules, functions, methods, vars, consts, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, SQL queries, migrations, external services, background jobs |
 | Python | Regex/heuristic | Functions, classes, methods, consts, decorators, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 | Rust | Regex/heuristic | Functions, methods, structs, enums, traits, types, consts, modules, macros, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
+| Swift | Regex/heuristic | Classes, structs, enums, protocols, extensions, functions, methods, properties, consts, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 | TypeScript | Regex/heuristic | Functions, classes, methods, interfaces, types, consts, vars, tests | imports, calls, tests, routes, config, SQL, services | routes, env vars, config keys, SQL queries, migrations, external services, background jobs |
 
 **Framework detection** for route and service extraction:
 
 | Language | Routes | HTTP Clients | Background Jobs |
 |----------|--------|-------------|-----------------|
+| C# | ASP.NET, Minimal API | HttpClient, WebRequest, RestClient | Task.Run, Thread, BackgroundService, Parallel |
+| Java | Spring MVC, JAX-RS | HttpClient, RestTemplate, WebClient, OkHttp | ExecutorService, CompletableFuture, @Async, Thread |
 | JavaScript/TS | Express, NestJS, Next.js | fetch, axios, http | Worker, Bull/BullMQ |
+| Lua | OpenResty/Lapis | http.request, socket.http | ngx.timer, copas |
 | Python | Flask, FastAPI, Django | requests, httpx, urllib | Celery, asyncio, threading, subprocess |
 | Rust | Actix-web, Rocket, Axum | reqwest, hyper, tonic | tokio::spawn, thread::spawn, rayon |
+| Swift | Vapor | URLSession, Alamofire | DispatchQueue, Task, async let |
 
-Go relationship extraction uses full AST parsing for exact confidence. TypeScript, JavaScript, Python, and Rust use regex-based heuristic extraction. All extractors share a comment filter to avoid matching patterns inside comments.
+Go relationship extraction uses full AST parsing for exact confidence. All other languages use regex-based heuristic extraction. All extractors share a comment filter to avoid matching patterns inside comments.
 
 Languages can be individually enabled/disabled in `.atlas/config.yaml`.
 
@@ -221,6 +229,10 @@ include:
   - "**/*.py"
   - "**/*.pyi"
   - "**/*.rs"
+  - "**/*.java"
+  - "**/*.cs"
+  - "**/*.swift"
+  - "**/*.lua"
 
 exclude:
   - "vendor/**"
@@ -231,6 +243,11 @@ exclude:
   - "target/**"
   - ".venv/**"
   - "venv/**"
+  - "build/**"
+  - "bin/**"
+  - "obj/**"
+  - ".build/**"
+  - "Packages/**"
 
 languages:
   go: true
@@ -238,6 +255,10 @@ languages:
   javascript: true
   python: true
   rust: true
+  java: true
+  csharp: true
+  swift: true
+  lua: true
 
 indexing:
   max_file_size_bytes: 1048576    # 1 MiB
