@@ -1,2 +1,29 @@
-/atlas
+# Build output
 /bin/
+/atlas
+*.exe
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Go workspace
+go.work
+go.work.sum
+
+# Atlas local data
+.atlas/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
