@@ -14,8 +14,8 @@ func DefaultConfig() Config {
 	return Config{
 		Version:    1,
 		StorageDir: DefaultStorageDir,
-		Include:    []string{"**/*.go", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.pyi", "**/*.rs", "**/*.java"},
-		Exclude:    []string{"vendor/**", "node_modules/**", ".git/**", "testdata/**", "__pycache__/**", "target/**", ".venv/**", "venv/**", "build/**"},
+		Include:    []string{"**/*.go", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.pyi", "**/*.rs", "**/*.java", "**/*.cs", "**/*.swift", "**/*.lua"},
+		Exclude:    []string{"vendor/**", "node_modules/**", ".git/**", "testdata/**", "__pycache__/**", "target/**", ".venv/**", "venv/**", "build/**", "bin/**", "obj/**", ".build/**", "Packages/**"},
 		Languages: LanguageConfig{
 			Go:         true,
 			TypeScript: true,
@@ -23,6 +23,9 @@ func DefaultConfig() Config {
 			Python:     true,
 			Rust:       true,
 			Java:       true,
+			CSharp:     true,
+			Swift:      true,
+			Lua:        true,
 		},
 		Indexing: IndexingConfig{
 			MaxFileSizeBytes: DefaultMaxFileSize,
@@ -53,6 +56,9 @@ include:
   - "**/*.pyi"
   - "**/*.rs"
   - "**/*.java"
+  - "**/*.cs"
+  - "**/*.swift"
+  - "**/*.lua"
 exclude:
   - "vendor/**"
   - "node_modules/**"
@@ -63,6 +69,10 @@ exclude:
   - ".venv/**"
   - "venv/**"
   - "build/**"
+  - "bin/**"
+  - "obj/**"
+  - ".build/**"
+  - "Packages/**"
 languages:
   go: true
   typescript: true
@@ -70,6 +80,9 @@ languages:
   python: true
   rust: true
   java: true
+  csharp: true
+  swift: true
+  lua: true
 indexing:
   max_file_size_bytes: 1048576
 summaries:

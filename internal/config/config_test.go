@@ -20,6 +20,15 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Languages.Java {
 		t.Error("expected Java enabled by default")
 	}
+	if !cfg.Languages.CSharp {
+		t.Error("expected CSharp enabled by default")
+	}
+	if !cfg.Languages.Swift {
+		t.Error("expected Swift enabled by default")
+	}
+	if !cfg.Languages.Lua {
+		t.Error("expected Lua enabled by default")
+	}
 	if cfg.Indexing.MaxFileSizeBytes != 1<<20 {
 		t.Errorf("expected max file size 1MiB, got %d", cfg.Indexing.MaxFileSizeBytes)
 	}

@@ -29,6 +29,9 @@ type LanguageConfig struct {
 	Python     bool `yaml:"python"     json:"python"`
 	Rust       bool `yaml:"rust"       json:"rust"`
 	Java       bool `yaml:"java"       json:"java"`
+	CSharp     bool `yaml:"csharp"     json:"csharp"`
+	Swift      bool `yaml:"swift"      json:"swift"`
+	Lua        bool `yaml:"lua"        json:"lua"`
 }
 
 // IndexingConfig controls indexing behavior.
