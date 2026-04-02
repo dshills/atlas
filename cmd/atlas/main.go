@@ -9,6 +9,8 @@ import (
 
 	"github.com/dshills/atlas/internal/config"
 	"github.com/dshills/atlas/internal/db"
+	"github.com/dshills/atlas/internal/extractor"
+	"github.com/dshills/atlas/internal/extractor/goextractor"
 	"github.com/dshills/atlas/internal/indexer"
 	"github.com/dshills/atlas/internal/model"
 	"github.com/dshills/atlas/internal/output"
@@ -190,6 +192,12 @@ func configCmd() *cobra.Command {
 	}
 }
 
+func buildRegistry() *extractor.Registry {
+	reg := extractor.NewRegistry()
+	reg.Register(goextractor.New())
+	return reg
+}
+
 func openDB(repoRoot string) (*store.Store, func(), error) {
 	dbPath := filepath.Join(repoRoot, config.DefaultStorageDir, config.DefaultDBFile)
 	database, err := db.Open(dbPath)
@@ -235,6 +243,8 @@ func indexCmd() *cobra.Command {
 			}
 
 			idx := indexer.New(repoRoot, cfg, s)
+			idx.Registry = buildRegistry()
+			idx.ModulePath = goextractor.DetectModulePath(repoRoot)
 			result, err := idx.Run(mode, flagSince)
 			if err != nil {
 				return err
@@ -284,6 +294,8 @@ func reindexCmd() *cobra.Command {
 			defer cleanup()
 
 			idx := indexer.New(repoRoot, cfg, s)
+			idx.Registry = buildRegistry()
+			idx.ModulePath = goextractor.DetectModulePath(repoRoot)
 			if err := idx.ClearAll(); err != nil {
 				return fmt.Errorf("clearing data: %w", err)
 			}

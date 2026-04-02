@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -8,18 +9,21 @@ import (
 
 	"github.com/dshills/atlas/internal/config"
 	"github.com/dshills/atlas/internal/diag"
+	"github.com/dshills/atlas/internal/extractor"
 	"github.com/dshills/atlas/internal/fswalk"
 	"github.com/dshills/atlas/internal/hash"
 	"github.com/dshills/atlas/internal/store"
 	"github.com/dshills/atlas/internal/vcs"
 )
 
-// Indexer orchestrates file scanning, hashing, and persistence.
+// Indexer orchestrates file scanning, hashing, extraction, and persistence.
 type Indexer struct {
-	RepoRoot string
-	Config   config.Config
-	Store    *store.Store
-	Diag     *diag.Collector
+	RepoRoot   string
+	Config     config.Config
+	Store      *store.Store
+	Registry   *extractor.Registry
+	Diag       *diag.Collector
+	ModulePath string
 }
 
 // New creates a new Indexer.
@@ -34,17 +38,18 @@ func New(repoRoot string, cfg config.Config, s *store.Store) *Indexer {
 
 // RunResult holds the results of an indexing run.
 type RunResult struct {
-	RunID        int64
-	FilesScanned int
-	FilesChanged int
-	FilesNew     int
-	FilesDeleted int
-	Status       string
+	RunID             int64  `json:"run_id"`
+	FilesScanned      int    `json:"files_scanned"`
+	FilesChanged      int    `json:"files_changed"`
+	FilesNew          int    `json:"files_new"`
+	FilesDeleted      int    `json:"files_deleted"`
+	SymbolsWritten    int    `json:"symbols_written"`
+	ReferencesWritten int    `json:"references_written"`
+	Status            string `json:"status"`
 }
 
 // Run executes a full or incremental index.
 func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
-	// Get git commit if available
 	gitCommit := ""
 	if gc, err := vcs.HeadCommit(idx.RepoRoot); err == nil {
 		gitCommit = gc
@@ -57,53 +62,25 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 
 	result := &RunResult{RunID: runID, Status: "success"}
 
-	// Determine which files to process
-	var candidates []fswalk.FileCandidate
-	if since != "" {
-		// Incremental based on git diff
-		diffFiles, err := vcs.DiffFiles(idx.RepoRoot, since)
-		if err != nil {
-			return nil, fmt.Errorf("git diff: %w", err)
-		}
-		// Filter diff files through walker logic
-		allCandidates, err := fswalk.Walk(idx.RepoRoot, idx.Config.Include, idx.Config.Exclude, idx.Config.Indexing.MaxFileSizeBytes)
-		if err != nil {
-			return nil, fmt.Errorf("walking: %w", err)
-		}
-		diffSet := make(map[string]bool, len(diffFiles))
-		for _, f := range diffFiles {
-			diffSet[f] = true
-		}
-		for _, c := range allCandidates {
-			if diffSet[c.Path] {
-				candidates = append(candidates, c)
-			}
-		}
-	} else {
-		candidates, err = fswalk.Walk(idx.RepoRoot, idx.Config.Include, idx.Config.Exclude, idx.Config.Indexing.MaxFileSizeBytes)
-		if err != nil {
-			return nil, fmt.Errorf("walking: %w", err)
-		}
+	candidates, err := idx.collectCandidates(since)
+	if err != nil {
+		return nil, err
 	}
 
 	result.FilesScanned = len(candidates)
 
-	// Get existing file hashes
 	existingHashes, err := idx.Store.FileHashMap()
 	if err != nil {
 		return nil, fmt.Errorf("loading file hashes: %w", err)
 	}
 
-	// Get existing file paths for deletion detection
 	existingPaths, err := idx.Store.AllFilePaths()
 	if err != nil {
 		return nil, fmt.Errorf("loading file paths: %w", err)
 	}
 
-	// Track which files we've seen in this scan
 	seenPaths := make(map[string]bool, len(candidates))
 
-	// Process each candidate
 	for _, c := range candidates {
 		seenPaths[c.Path] = true
 
@@ -119,7 +96,7 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 
 		contentHash := hash.Hash(content)
 		if existingHash, exists := existingHashes[c.Path]; exists && existingHash == contentHash {
-			continue // unchanged
+			continue
 		}
 
 		result.FilesChanged++
@@ -128,6 +105,8 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 		}
 
 		modTime := time.Unix(c.ModTime, 0).UTC().Format(time.RFC3339)
+		parseStatus := "skipped"
+
 		fileRow := &store.FileRow{
 			Path:            c.Path,
 			Language:        c.Language,
@@ -136,15 +115,40 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 			LastModifiedUTC: sql.NullString{String: modTime, Valid: true},
 			GitCommit:       sql.NullString{String: gitCommit, Valid: gitCommit != ""},
 			IsGenerated:     c.IsGenerated,
-			ParseStatus:     "skipped", // Phase 2: no parsing yet
+			ParseStatus:     parseStatus,
 		}
 
-		if _, err := idx.Store.UpsertFile(fileRow); err != nil {
+		fileID, err := idx.Store.UpsertFile(fileRow)
+		if err != nil {
 			idx.Diag.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Code:     diag.CodeParseError,
 				Message:  fmt.Sprintf("failed to persist file %s: %v", c.Path, err),
 			})
+			continue
+		}
+
+		// Run extractor if available
+		if idx.Registry != nil {
+			ext, extErr := idx.Registry.ForPath(c.Path)
+			if extErr != nil {
+				idx.Diag.Add(diag.Diagnostic{
+					Severity: diag.SeverityInfo,
+					Code:     diag.CodeUnsupportedLang,
+					Message:  fmt.Sprintf("no extractor for %s", c.Path),
+				})
+				continue
+			}
+
+			symCount, refCount, extractParseStatus := idx.extractAndPersist(ext, c, content, fileID)
+			result.SymbolsWritten += symCount
+			result.ReferencesWritten += refCount
+
+			if extractParseStatus != "" {
+				if _, err := idx.Store.DB.Exec(`UPDATE files SET parse_status = ? WHERE id = ?`, extractParseStatus, fileID); err != nil {
+					idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update parse_status for %s: %v", c.Path, err))
+				}
+			}
 		}
 	}
 
@@ -164,32 +168,137 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 		}
 	}
 
-	// Persist diagnostics
 	if err := idx.Store.PersistDiagnostics(runID, idx.Diag.All()); err != nil {
 		return nil, fmt.Errorf("persisting diagnostics: %w", err)
 	}
 
-	// Determine final status
 	if idx.Diag.HasErrors() {
-		if idx.Config.Indexing.MaxFileSizeBytes > 0 { // proxy for "strict not set"
-			result.Status = "partial"
-		}
+		result.Status = "partial"
 	}
 
-	// Finish run
 	run := &store.RunRow{
-		ID:           runID,
-		Status:       result.Status,
-		FilesScanned: result.FilesScanned,
-		FilesChanged: result.FilesChanged,
-		ErrorCount:   idx.Diag.ErrorCount(),
-		WarningCount: idx.Diag.WarningCount(),
+		ID:                runID,
+		Status:            result.Status,
+		FilesScanned:      result.FilesScanned,
+		FilesChanged:      result.FilesChanged,
+		SymbolsWritten:    result.SymbolsWritten,
+		ReferencesWritten: result.ReferencesWritten,
+		ErrorCount:        idx.Diag.ErrorCount(),
+		WarningCount:      idx.Diag.WarningCount(),
 	}
 	if err := idx.Store.FinishRun(run); err != nil {
 		return nil, fmt.Errorf("finishing run: %w", err)
 	}
 
 	return result, nil
+}
+
+func (idx *Indexer) extractAndPersist(ext extractor.Extractor, c fswalk.FileCandidate, content []byte, fileID int64) (int, int, string) {
+	req := extractor.ExtractRequest{
+		FilePath:   c.Path,
+		AbsPath:    c.AbsPath,
+		Content:    content,
+		RepoRoot:   idx.RepoRoot,
+		ModulePath: idx.ModulePath,
+	}
+
+	res, err := ext.Extract(context.Background(), req)
+	if err != nil {
+		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("extraction failed for %s: %v", c.Path, err))
+		return 0, 0, "error"
+	}
+
+	// Record diagnostics from extraction
+	for _, d := range res.Diagnostics {
+		idx.Diag.Add(diag.Diagnostic{
+			Severity: d.Severity,
+			Code:     d.Code,
+			Message:  d.Message,
+			FileID:   fileID,
+			Line:     d.Line,
+		})
+	}
+
+	parseStatus := ""
+	if res.File != nil {
+		parseStatus = res.File.ParseStatus
+	}
+
+	// Persist package
+	var packageID int64
+	if res.Package != nil {
+		pkgRow := &store.PackageRow{
+			Name:          res.Package.Name,
+			ImportPath:    sql.NullString{String: res.Package.ImportPath, Valid: res.Package.ImportPath != ""},
+			DirectoryPath: res.Package.DirectoryPath,
+			Language:      res.Package.Language,
+		}
+		pid, err := idx.Store.UpsertPackage(pkgRow)
+		if err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to persist package for %s: %v", c.Path, err))
+		} else {
+			packageID = pid
+			_ = idx.Store.LinkFileToPackage(fileID, packageID)
+
+			// Update denormalized fields
+			if _, err := idx.Store.DB.Exec(`UPDATE files SET package_name = ?, module_name = ? WHERE id = ?`,
+				res.Package.Name, sql.NullString{String: res.Package.ImportPath, Valid: res.Package.ImportPath != ""}, fileID); err != nil {
+				idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update denormalized fields for %s: %v", c.Path, err))
+			}
+		}
+	}
+
+	// Persist symbols
+	symCount := 0
+	if len(res.Symbols) > 0 {
+		n, err := idx.Store.UpsertSymbols(fileID, packageID, res.Symbols)
+		if err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to persist symbols for %s: %v", c.Path, err))
+		}
+		symCount = n
+	}
+
+	// Persist references
+	refCount := 0
+	if len(res.References) > 0 {
+		n, err := idx.Store.UpsertReferences(fileID, res.References)
+		if err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to persist references for %s: %v", c.Path, err))
+		}
+		refCount = n
+	}
+
+	return symCount, refCount, parseStatus
+}
+
+func (idx *Indexer) collectCandidates(since string) ([]fswalk.FileCandidate, error) {
+	if since != "" {
+		diffFiles, err := vcs.DiffFiles(idx.RepoRoot, since)
+		if err != nil {
+			return nil, fmt.Errorf("git diff: %w", err)
+		}
+		allCandidates, err := fswalk.Walk(idx.RepoRoot, idx.Config.Include, idx.Config.Exclude, idx.Config.Indexing.MaxFileSizeBytes)
+		if err != nil {
+			return nil, fmt.Errorf("walking: %w", err)
+		}
+		diffSet := make(map[string]bool, len(diffFiles))
+		for _, f := range diffFiles {
+			diffSet[f] = true
+		}
+		var candidates []fswalk.FileCandidate
+		for _, c := range allCandidates {
+			if diffSet[c.Path] {
+				candidates = append(candidates, c)
+			}
+		}
+		return candidates, nil
+	}
+
+	candidates, err := fswalk.Walk(idx.RepoRoot, idx.Config.Include, idx.Config.Exclude, idx.Config.Indexing.MaxFileSizeBytes)
+	if err != nil {
+		return nil, fmt.Errorf("walking: %w", err)
+	}
+	return candidates, nil
 }
 
 // ClearAll removes all derived data for a full reindex.
