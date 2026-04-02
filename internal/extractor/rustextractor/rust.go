@@ -206,19 +206,29 @@ func extractSymbols(content string, lines []string, moduleName string) []extract
 		implEnd := findBlockEnd(lines, implLine-1)
 
 		if implLine < len(lines) && implEnd <= len(lines) {
-			implBody := strings.Join(lines[implLine:min(implEnd, len(lines))], "\n")
-			methodMatches := implMethodRe.FindAllStringSubmatch(implBody, -1)
-			for _, mm := range methodMatches {
+			for i := implLine; i < min(implEnd, len(lines)); i++ {
+				mm := implMethodRe.FindStringSubmatch(lines[i])
+				if mm == nil {
+					continue
+				}
 				methodName := mm[1]
 				qname := moduleName + "::" + typeName + "::" + methodName
 				stableID := "rust:" + qname + ":method"
+
+				mVis := "exported"
+				trimmed := strings.TrimSpace(lines[i])
+				if !strings.HasPrefix(trimmed, "pub") {
+					mVis = "unexported"
+				}
 
 				symbols = append(symbols, extractor.SymbolRecord{
 					Name:           methodName,
 					QualifiedName:  qname,
 					SymbolKind:     "method",
-					Visibility:     "exported",
+					Visibility:     mVis,
 					ParentSymbolID: moduleName + "::" + typeName,
+					StartLine:      i + 1,
+					EndLine:        findBlockEnd(lines, i),
 					StableID:       stableID,
 				})
 			}

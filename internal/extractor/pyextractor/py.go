@@ -62,15 +62,14 @@ func isTestFilePath(path string) bool {
 
 // Regex patterns for Python extraction.
 var (
-	importRe      = regexp.MustCompile(`(?m)^import\s+(\S+)`)
-	fromImportRe  = regexp.MustCompile(`(?m)^from\s+(\S+)\s+import\s+`)
-	funcDeclRe    = regexp.MustCompile(`(?m)^def\s+(\w+)\s*\(`)
-	asyncFuncRe   = regexp.MustCompile(`(?m)^async\s+def\s+(\w+)\s*\(`)
-	classDeclRe   = regexp.MustCompile(`(?m)^class\s+(\w+)`)
-	methodRe      = regexp.MustCompile(`(?m)^    def\s+(\w+)\s*\(`)
-	asyncMethodRe = regexp.MustCompile(`(?m)^    async\s+def\s+(\w+)\s*\(`)
-	constDeclRe   = regexp.MustCompile(`(?m)^([A-Z][A-Z_0-9]+)\s*=\s*`)
-	decoratorRe   = regexp.MustCompile(`(?m)^(@\w[\w.]*)\s*(?:\(|$)`)
+	importRe     = regexp.MustCompile(`(?m)^import\s+(\S+)`)
+	fromImportRe = regexp.MustCompile(`(?m)^from\s+(\S+)\s+import\s+`)
+	funcDeclRe   = regexp.MustCompile(`(?m)^def\s+(\w+)\s*\(`)
+	asyncFuncRe  = regexp.MustCompile(`(?m)^async\s+def\s+(\w+)\s*\(`)
+	classDeclRe  = regexp.MustCompile(`(?m)^class\s+(\w+)`)
+	methodDefRe  = regexp.MustCompile(`^\s+(?:async\s+)?def\s+(\w+)\s*\(`)
+	constDeclRe  = regexp.MustCompile(`(?m)^([A-Z][A-Z_0-9]+)\s*=\s*`)
+	decoratorRe  = regexp.MustCompile(`(?m)^(@\w[\w.]*)\s*(?:\(|$)`)
 )
 
 func extractImports(content string, _ []string) []extractor.ReferenceRecord {
@@ -153,32 +152,35 @@ func extractSymbols(content string, lines []string, moduleName string, isTestFil
 			StableID:      stableID,
 		})
 
-		// Extract methods within the class body
-		if classLine-1 < len(lines) && classEnd <= len(lines) {
-			classBody := strings.Join(lines[classLine:min(classEnd, len(lines))], "\n")
-			for _, mre := range []*regexp.Regexp{methodRe, asyncMethodRe} {
-				methodMatches := mre.FindAllStringSubmatch(classBody, -1)
-				for _, mm := range methodMatches {
-					methodName := mm[1]
-
-					mQname := moduleName + "." + className + "." + methodName
-					mStableID := "python:" + mQname + ":method"
-
-					mVis := "exported"
-					if strings.HasPrefix(methodName, "_") && !strings.HasPrefix(methodName, "__") {
-						mVis = "unexported"
-					}
-
-					symbols = append(symbols, extractor.SymbolRecord{
-						Name:           methodName,
-						QualifiedName:  mQname,
-						SymbolKind:     "method",
-						Visibility:     mVis,
-						ParentSymbolID: qname,
-						StableID:       mStableID,
-					})
-				}
+		// Extract methods within the class body using indentation detection
+		for i := classLine; i < min(classEnd, len(lines)); i++ {
+			m := methodDefRe.FindStringSubmatch(lines[i])
+			if m == nil {
+				continue
 			}
+			// Only match lines indented deeper than the class header
+			if indentLevel(lines[i]) <= indentLevel(lines[classLine-1]) {
+				continue
+			}
+			methodName := m[1]
+			mQname := moduleName + "." + className + "." + methodName
+			mStableID := "python:" + mQname + ":method"
+
+			mVis := "exported"
+			if strings.HasPrefix(methodName, "_") && !strings.HasPrefix(methodName, "__") {
+				mVis = "unexported"
+			}
+
+			symbols = append(symbols, extractor.SymbolRecord{
+				Name:           methodName,
+				QualifiedName:  mQname,
+				SymbolKind:     "method",
+				Visibility:     mVis,
+				ParentSymbolID: qname,
+				StartLine:      i + 1,
+				EndLine:        findBlockEnd(lines, i),
+				StableID:       mStableID,
+			})
 		}
 	}
 
