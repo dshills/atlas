@@ -61,8 +61,8 @@ func main() {
 		cli.StatsCmd(cliCtx),
 		cli.StaleCmd(cliCtx),
 		cli.SummarizeCmd(cliCtx, Version),
-		placeholderCmd("doctor", "Check repository health"),
-		placeholderCmd("validate", "Validate index integrity"),
+		cli.DoctorCmd(cliCtx),
+		cli.ValidateCmd(cliCtx),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -332,16 +332,6 @@ func reindexCmd() *cobra.Command {
 				})
 			}
 			return f.Write(result)
-		},
-	}
-}
-
-func placeholderCmd(name, short string) *cobra.Command {
-	return &cobra.Command{
-		Use:   name,
-		Short: short,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("%s: not yet implemented", name)
 		},
 	}
 }
