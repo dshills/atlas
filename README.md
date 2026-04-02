@@ -142,7 +142,7 @@ Summaries are deterministic aggregations of indexed data (not LLM-generated). Th
 | `atlas doctor` | Run 8 health checks (storage, DB, schema, manifest, runs, stale summaries, missing files, SQLite integrity) |
 | `atlas validate` | Run 12 integrity checks (FK violations, orphaned symbols, stale summaries, denormalized field consistency, length constraints) |
 | `atlas validate --strict` | Additionally check that all files matching include globs are indexed |
-| `atlas hook install` | Install Claude Code PreToolUse hook for automatic re-indexing |
+| `atlas hook install` | Install Claude Code PreToolUse hook for automatic re-indexing (`--claude-md` to also write CLAUDE.md instructions) |
 | `atlas hook uninstall` | Remove the Claude Code hook |
 | `atlas hook status` | Check if the hook is installed |
 
