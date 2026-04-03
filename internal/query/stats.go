@@ -3,6 +3,7 @@ package query
 import (
 	"database/sql"
 	"os"
+	"time"
 )
 
 // RepoStats holds repository statistics.
@@ -147,8 +148,9 @@ func GetStats(db *sql.DB, dbPath string) (*RepoStats, error) {
 		FROM index_runs ORDER BY id DESC LIMIT 1`).
 		Scan(&lr.StartedAt, &finishedAt, &lr.Status, &lr.Mode)
 	if err == nil {
+		lr.StartedAt = toLocalTime(lr.StartedAt)
 		if finishedAt.Valid {
-			lr.FinishedAt = finishedAt.String
+			lr.FinishedAt = toLocalTime(finishedAt.String)
 		}
 		stats.LastRun = &lr
 	}
@@ -161,4 +163,14 @@ func GetStats(db *sql.DB, dbPath string) (*RepoStats, error) {
 	}
 
 	return stats, nil
+}
+
+// toLocalTime converts an RFC3339 UTC timestamp to local time.
+// Returns the original string unchanged if parsing fails.
+func toLocalTime(s string) string {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	return t.Local().Format(time.RFC3339)
 }
