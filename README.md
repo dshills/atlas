@@ -48,6 +48,18 @@ atlas index
 atlas stats
 ```
 
+### Set Up Claude Code Integration
+
+```bash
+# Install the auto-reindex hook (runs atlas index after Write/Edit/MultiEdit)
+atlas hook install
+
+# Also write Code Search Protocol instructions to CLAUDE.md
+atlas hook install --claude-md
+```
+
+This keeps the index fresh automatically as Claude edits files, and teaches it to prefer atlas queries over reading source.
+
 ### Basic Queries
 
 ```bash
