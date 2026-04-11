@@ -31,7 +31,7 @@ make install    # installs to $GOPATH/bin
 make build      # outputs to ./bin/atlas
 ```
 
-**Requirements:** Go 1.21+ (no CGO required — uses pure-Go SQLite via `modernc.org/sqlite`)
+**Requirements:** Go 1.26+ (no CGO required — uses pure-Go SQLite via `modernc.org/sqlite`)
 
 ### Initialize and Index
 
