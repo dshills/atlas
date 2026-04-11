@@ -14,21 +14,32 @@ import (
 const hookCommand = "atlas index 2>/dev/null"
 const hookTimeout = 15000
 
-const claudeMDSection = `## Atlas Index
+const claudeMDSection = `## Code Search Protocol
 
-This repository has an Atlas index for structural and semantic code queries.
-Use atlas commands with --agent for compact JSON instead of reading source files:
+Use this decision tree — in order — before reading any source file:
 
-- ` + "`atlas find symbol <name> --agent`" + ` — find symbol definitions
-- ` + "`atlas who-calls <symbol> --agent`" + ` — find callers
-- ` + "`atlas calls <symbol> --agent`" + ` — find callees
-- ` + "`atlas implementations <interface> --agent`" + ` — find implementations
-- ` + "`atlas tests-for <symbol> --agent`" + ` — find related tests
-- ` + "`atlas summarize file <path> --agent`" + ` — get file summary
-- ` + "`atlas list routes --agent`" + ` — list HTTP routes
-- ` + "`atlas export graph --agent`" + ` — get full dependency graph
+### Structural questions → atlas (always first)
+- "Where is X defined?" → ` + "`atlas find symbol X --agent`" + `
+- "What calls X?" → ` + "`atlas who-calls X --agent`" + `
+- "What does X call?" → ` + "`atlas calls X --agent`" + `
+- "What implements interface X?" → ` + "`atlas implementations X --agent`" + `
+- "Which tests cover X?" → ` + "`atlas tests-for X --agent`" + `
+- "What routes exist?" → ` + "`atlas list routes --agent`" + `
+- "What changed?" → ` + "`atlas index --since HEAD~1 && atlas stale --agent`" + `
 
-The index auto-updates via a PreToolUse hook. To manually re-index: ` + "`atlas index`" + `
+### Before reading a large file → summarize first
+` + "`atlas summarize file <path> --agent`" + `
+Only read the file directly if the summary is insufficient.
+
+### Content/pattern questions → rg
+- Error strings, log messages, string literals
+- Comments, TODOs, inline notes
+- Non-Go/TS files (YAML, SQL, Markdown)
+- Unstaged files not yet indexed
+
+### Never read source files to answer these questions
+If atlas has the answer, do not use Read or Bash(cat).
+Atlas is authoritative — its index is maintained by the PreToolUse hook.
 `
 
 // HookCmd creates the `atlas hook` command with install/uninstall subcommands.
@@ -216,7 +227,7 @@ func writeClaudeMD(repoRoot string) (string, error) {
 		return mdPath, fmt.Errorf("reading CLAUDE.md: %w", err)
 	}
 
-	if strings.Contains(string(existing), "## Atlas Index") {
+	if strings.Contains(string(existing), "## Code Search Protocol") || strings.Contains(string(existing), "## Atlas Index") {
 		return mdPath, nil // already has Atlas section
 	}
 
@@ -282,7 +293,7 @@ func hookInstallCmd(ctx *CLIContext) *cobra.Command {
 				}
 				mdStatus := "written"
 				existing, _ := os.ReadFile(mdPath)
-				if strings.Contains(string(existing), "## Atlas Index") {
+				if strings.Contains(string(existing), "## Code Search Protocol") || strings.Contains(string(existing), "## Atlas Index") {
 					mdStatus = "already present"
 				}
 				kvs = append(kvs, output.KV{Key: "CLAUDE.md", Value: mdStatus})

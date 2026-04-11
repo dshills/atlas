@@ -140,8 +140,8 @@ func TestWriteClaudeMDCreatesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(content), "## Atlas Index") {
-		t.Error("expected CLAUDE.md to contain Atlas Index section")
+	if !strings.Contains(string(content), "## Code Search Protocol") {
+		t.Error("expected CLAUDE.md to contain Code Search Protocol section")
 	}
 	if !strings.Contains(string(content), "atlas find symbol") {
 		t.Error("expected CLAUDE.md to contain atlas command examples")
@@ -169,8 +169,8 @@ func TestWriteClaudeMDAppendsToExisting(t *testing.T) {
 	if !strings.Contains(string(content), "Existing instructions here.") {
 		t.Error("expected existing content to be preserved")
 	}
-	if !strings.Contains(string(content), "## Atlas Index") {
-		t.Error("expected Atlas section to be appended")
+	if !strings.Contains(string(content), "## Code Search Protocol") {
+		t.Error("expected Code Search Protocol section to be appended")
 	}
 }
 
