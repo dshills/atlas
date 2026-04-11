@@ -15,6 +15,13 @@ func SummarizeCmd(ctx *CLIContext, version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "summarize",
 		Short: "Generate or retrieve summaries",
+		Long: `Generate or retrieve deterministic summaries of files, packages, or symbols.
+
+Summaries are aggregations of indexed data (not LLM-generated) and include
+responsibilities, dependencies, public API surface, and related artifacts.`,
+		Example: `  atlas summarize file internal/cli/hook.go
+  atlas summarize package query --agent
+  atlas summarize symbol main.Run`,
 	}
 
 	cmd.AddCommand(

@@ -14,6 +14,10 @@ func ListCmd(ctx *CLIContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List packages, routes, jobs, migrations, integrations, entrypoints, or diagnostics",
+		Example: `  atlas list packages
+  atlas list routes --agent
+  atlas list jobs
+  atlas list diagnostics`,
 	}
 	cmd.AddCommand(
 		listPackagesCmd(ctx),

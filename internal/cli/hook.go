@@ -47,6 +47,19 @@ func HookCmd(ctx *CLIContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hook",
 		Short: "Manage Claude Code integration hooks",
+		Long: `Manage Claude Code integration hooks for automatic re-indexing.
+
+Subcommands:
+  install     Install PostToolUse hook (re-indexes after Write/Edit/MultiEdit)
+  uninstall   Remove the Atlas hook
+  status      Check if the hook is installed
+
+The install command accepts --claude-md to also write Code Search Protocol
+instructions to your project's CLAUDE.md.`,
+		Example: `  atlas hook install              # install the auto-reindex hook
+  atlas hook install --claude-md  # install hook + write CLAUDE.md instructions
+  atlas hook status               # check if hook is installed
+  atlas hook uninstall            # remove the hook`,
 	}
 
 	cmd.AddCommand(

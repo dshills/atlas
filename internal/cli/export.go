@@ -14,6 +14,18 @@ func ExportCmd(ctx *CLIContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Export index data as stable JSON",
+		Long: `Export index data as stable JSON. All subcommands support --out <file>.
+
+Subcommands:
+  summary      Repository overview (packages, entrypoints, stale counts)
+  graph        Symbol/reference graph as nodes and edges
+  symbols      All symbols with qualified names, kinds, locations
+  packages     All packages with file counts
+  routes       All route artifacts
+  diagnostics  Diagnostics from the latest run`,
+		Example: `  atlas export summary --agent
+  atlas export graph --out graph.json
+  atlas export symbols`,
 	}
 
 	cmd.AddCommand(

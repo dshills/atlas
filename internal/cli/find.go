@@ -14,6 +14,19 @@ func FindCmd(ctx *CLIContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "find",
 		Short: "Query symbols, files, packages, and artifacts",
+		Long: `Query symbols, files, packages, and artifacts in the index.
+
+Subcommands:
+  symbol   Find symbols by name or qualified name (supports --fuzzy, --kind)
+  file     Find files by path pattern
+  package  Find packages by name or import path
+  route    Find route artifacts by pattern
+  config   Find config key artifacts by pattern`,
+		Example: `  atlas find symbol HandleRequest
+  atlas find symbol --kind function --fuzzy Request
+  atlas find file "internal/cli/*.go"
+  atlas find package query
+  atlas find route "/api"`,
 	}
 	cmd.AddCommand(
 		findSymbolCmd(ctx),

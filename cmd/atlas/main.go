@@ -39,6 +39,22 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "atlas",
 		Short: "Atlas — structural and semantic index for source repositories",
+		Long: `Atlas builds and maintains a structural and semantic index of source
+repositories in SQLite, enabling fast symbol, relationship, and summary
+queries without rereading source files.
+
+Key command groups:
+  find        Query symbols, files, packages, routes, config keys
+  list        List packages, routes, jobs, migrations, integrations, entrypoints
+  export      Export index data as stable JSON
+  summarize   Generate file, package, or symbol summaries
+  hook        Manage Claude Code integration hooks
+
+Use "atlas [command] --help" for subcommands and flags within each group.`,
+		Example: `  atlas init && atlas index          # set up a new repository
+  atlas find symbol HandleRequest    # find a symbol definition
+  atlas who-calls main.Run           # find callers
+  atlas hook install --claude-md     # install Claude Code hook + instructions`,
 	}
 
 	rootCmd.PersistentFlags().StringVar(&flagRepo, "repo", "", "Explicit repository root path")
