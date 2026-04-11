@@ -129,4 +129,4 @@ atlas export graph --agent     # dependency graph for architectural questions
 
 ### Never read source files to answer these questions
 If atlas has the answer, do not use Read or Bash(cat).
-Atlas is authoritative — its index is maintained by the PreToolUse hook.
+Atlas is authoritative — its index is maintained by a PostToolUse hook on Write/Edit/MultiEdit.

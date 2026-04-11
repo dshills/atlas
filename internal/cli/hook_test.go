@@ -75,10 +75,14 @@ func TestHookInstallPreservesExisting(t *testing.T) {
 		t.Error("expected atlas hook to be installed")
 	}
 
-	// Verify existing hooks preserved
+	// Verify existing hooks preserved alongside atlas hook
 	hooks := loaded["hooks"].(map[string]any)
-	if _, ok := hooks["PostToolUse"]; !ok {
-		t.Error("expected existing PostToolUse hook to be preserved")
+	postToolUse, ok := hooks["PostToolUse"].([]any)
+	if !ok {
+		t.Fatal("expected PostToolUse to be a list")
+	}
+	if len(postToolUse) < 2 {
+		t.Error("expected at least 2 PostToolUse entries (existing + atlas)")
 	}
 
 	// Verify permissions preserved
@@ -124,6 +128,33 @@ func TestHookIdempotentInstall(t *testing.T) {
 	// hasAtlasHook should prevent double-add in real code
 	if !hasAtlasHook(settings) {
 		t.Error("expected hook to still be detected")
+	}
+}
+
+func TestHookDetectsLegacyPreToolUse(t *testing.T) {
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"PreToolUse": []any{
+				map[string]any{
+					"matcher": "Bash",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": hookCommand},
+					},
+				},
+			},
+		},
+	}
+
+	if !hasAtlasHook(settings) {
+		t.Error("expected hasAtlasHook to detect legacy PreToolUse hook")
+	}
+
+	removed := removeAtlasHook(settings)
+	if !removed {
+		t.Error("expected removeAtlasHook to remove legacy PreToolUse hook")
+	}
+	if hasAtlasHook(settings) {
+		t.Error("expected hook to be gone after removal")
 	}
 }
 

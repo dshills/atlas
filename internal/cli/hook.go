@@ -39,7 +39,7 @@ Only read the file directly if the summary is insufficient.
 
 ### Never read source files to answer these questions
 If atlas has the answer, do not use Read or Bash(cat).
-Atlas is authoritative — its index is maintained by the PreToolUse hook.
+Atlas is authoritative — its index is maintained by a PostToolUse hook on Write/Edit/MultiEdit.
 `
 
 // HookCmd creates the `atlas hook` command with install/uninstall subcommands.
@@ -117,21 +117,24 @@ func hasAtlasHook(settings map[string]any) bool {
 	if !ok {
 		return false
 	}
-	preToolUse, ok := hooksMap["PreToolUse"]
-	if !ok {
-		return false
-	}
-	matcherList, ok := preToolUse.([]any)
-	if !ok {
-		return false
-	}
-	for _, entry := range matcherList {
-		entryMap, ok := entry.(map[string]any)
+	// Check both PostToolUse (current) and PreToolUse (legacy).
+	for _, event := range []string{"PostToolUse", "PreToolUse"} {
+		eventHooks, ok := hooksMap[event]
 		if !ok {
 			continue
 		}
-		if matcherContainsAtlasHook(entryMap) {
-			return true
+		matcherList, ok := eventHooks.([]any)
+		if !ok {
+			continue
+		}
+		for _, entry := range matcherList {
+			entryMap, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			if matcherContainsAtlasHook(entryMap) {
+				return true
+			}
 		}
 	}
 	return false
@@ -150,7 +153,7 @@ func addAtlasHook(settings map[string]any) {
 	}
 
 	newEntry := map[string]any{
-		"matcher": "Bash",
+		"matcher": "Write|Edit|MultiEdit",
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
@@ -160,17 +163,17 @@ func addAtlasHook(settings map[string]any) {
 		},
 	}
 
-	preToolUse, ok := hooksMap["PreToolUse"]
+	postToolUse, ok := hooksMap["PostToolUse"]
 	if !ok {
-		hooksMap["PreToolUse"] = []any{newEntry}
+		hooksMap["PostToolUse"] = []any{newEntry}
 		return
 	}
-	matcherList, ok := preToolUse.([]any)
+	matcherList, ok := postToolUse.([]any)
 	if !ok {
-		hooksMap["PreToolUse"] = []any{newEntry}
+		hooksMap["PostToolUse"] = []any{newEntry}
 		return
 	}
-	hooksMap["PreToolUse"] = append(matcherList, newEntry)
+	hooksMap["PostToolUse"] = append(matcherList, newEntry)
 }
 
 func removeAtlasHook(settings map[string]any) bool {
@@ -182,34 +185,38 @@ func removeAtlasHook(settings map[string]any) bool {
 	if !ok {
 		return false
 	}
-	preToolUse, ok := hooksMap["PreToolUse"]
-	if !ok {
-		return false
-	}
-	matcherList, ok := preToolUse.([]any)
-	if !ok {
-		return false
-	}
 
-	var filtered []any
 	removed := false
-	for _, entry := range matcherList {
-		entryMap, ok := entry.(map[string]any)
+	// Remove from both PostToolUse (current) and PreToolUse (legacy).
+	for _, event := range []string{"PostToolUse", "PreToolUse"} {
+		eventHooks, ok := hooksMap[event]
 		if !ok {
-			filtered = append(filtered, entry)
 			continue
 		}
-		if matcherContainsAtlasHook(entryMap) {
-			removed = true
+		matcherList, ok := eventHooks.([]any)
+		if !ok {
 			continue
 		}
-		filtered = append(filtered, entry)
-	}
 
-	if len(filtered) == 0 {
-		delete(hooksMap, "PreToolUse")
-	} else {
-		hooksMap["PreToolUse"] = filtered
+		var filtered []any
+		for _, entry := range matcherList {
+			entryMap, ok := entry.(map[string]any)
+			if !ok {
+				filtered = append(filtered, entry)
+				continue
+			}
+			if matcherContainsAtlasHook(entryMap) {
+				removed = true
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+
+		if len(filtered) == 0 {
+			delete(hooksMap, event)
+		} else {
+			hooksMap[event] = filtered
+		}
 	}
 
 	if len(hooksMap) == 0 {
@@ -258,7 +265,7 @@ func hookInstallCmd(ctx *CLIContext) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install Claude Code PreToolUse hook for automatic re-indexing",
+		Short: "Install Claude Code PostToolUse hook for automatic re-indexing",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, err := ctx.RepoRoot()
 			if err != nil {

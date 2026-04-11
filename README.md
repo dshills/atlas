@@ -162,7 +162,7 @@ Summaries are deterministic aggregations of indexed data (not LLM-generated). Th
 | `atlas doctor` | Run 8 health checks (storage, DB, schema, manifest, runs, stale summaries, missing files, SQLite integrity) |
 | `atlas validate` | Run 12 integrity checks (FK violations, orphaned symbols, stale summaries, denormalized field consistency, length constraints) |
 | `atlas validate --strict` | Additionally check that all files matching include globs are indexed |
-| `atlas hook install` | Install Claude Code PreToolUse hook for automatic re-indexing (`--claude-md` to also write CLAUDE.md instructions) |
+| `atlas hook install` | Install Claude Code PostToolUse hook for automatic re-indexing (`--claude-md` to also write CLAUDE.md instructions) |
 | `atlas hook uninstall` | Remove the Claude Code hook |
 | `atlas hook status` | Check if the hook is installed |
 
@@ -308,7 +308,7 @@ atlas init && atlas index
 atlas hook install
 ```
 
-The `atlas hook install` command adds a `PreToolUse` hook to `.claude/settings.json` that runs `atlas index` before each Bash command. This keeps the index fresh as Claude makes changes — no manual re-indexing needed.
+The `atlas hook install` command adds a `PostToolUse` hook to `.claude/settings.json` that runs `atlas index` after Write, Edit, or MultiEdit operations. This keeps the index fresh as Claude makes changes — no manual re-indexing needed.
 
 Use `--claude-md` to also append Atlas usage instructions to your project's `CLAUDE.md`:
 
@@ -379,7 +379,7 @@ Only read the file directly if the summary is insufficient.
 
 ### Never read source files to answer these questions
 If atlas has the answer, do not use Read or Bash(cat).
-Atlas is authoritative — its index is maintained by the PreToolUse hook.
+Atlas is authoritative — its index is maintained by a PostToolUse hook on Write/Edit/MultiEdit.
 ```
 
 ### Export for Context Loading
