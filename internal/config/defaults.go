@@ -7,6 +7,7 @@ const (
 	DefaultManifestFile  = "manifest.json"
 	DefaultMaxFileSize   = int64(1 << 20) // 1 MiB
 	DefaultSummaryMaxLen = 500
+	DefaultBatchSize     = 50
 )
 
 // DefaultConfig returns a Config with default values.
@@ -30,6 +31,7 @@ func DefaultConfig() Config {
 		Indexing: IndexingConfig{
 			MaxFileSizeBytes: DefaultMaxFileSize,
 			Workers:          0,
+			BatchSize:        DefaultBatchSize,
 		},
 		Summaries: SummaryConfig{
 			Enabled: true,
@@ -87,6 +89,7 @@ languages:
 indexing:
   max_file_size_bytes: 1048576
   workers: 0  # 0 = runtime.NumCPU()
+  batch_size: 50  # files per SQLite transaction
 summaries:
   enabled: true
   file: true

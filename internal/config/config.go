@@ -40,6 +40,11 @@ type IndexingConfig struct {
 	// Workers sets the number of parallel file-parsing workers. 0 means
 	// runtime.NumCPU(). Persistence is always serialized on a single writer.
 	Workers int `yaml:"workers" json:"workers"`
+	// BatchSize is how many parsed files the writer groups into a single
+	// SQLite transaction. Larger values amortize fsync cost but widen the
+	// window of work lost if the process is killed mid-batch. 0 falls back
+	// to the default.
+	BatchSize int `yaml:"batch_size" json:"batch_size"`
 }
 
 // SummaryConfig controls summary generation.

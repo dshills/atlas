@@ -88,6 +88,24 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 	defer cancel()
 	results := idx.runParseWorkers(ctx, candidates, existingHashes)
 
+	batchSize := idx.Config.Indexing.BatchSize
+	if batchSize <= 0 {
+		batchSize = config.DefaultBatchSize
+	}
+	batch := make([]parseOutcome, 0, batchSize)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		stats := idx.persistBatch(batch, gitCommit, existingHashes, existingPaths)
+		result.FilesChanged += stats.filesChanged
+		result.FilesNew += stats.filesNew
+		result.SymbolsWritten += stats.symbols
+		result.ReferencesWritten += stats.references
+		clear(batch)
+		batch = batch[:0]
+	}
+
 	for out := range results {
 		if out.readErr != nil {
 			idx.Diag.Add(diag.Diagnostic{
@@ -101,15 +119,12 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 			continue
 		}
 
-		result.FilesChanged++
-		if _, exists := existingHashes[out.candidate.Path]; !exists {
-			result.FilesNew++
+		batch = append(batch, out)
+		if len(batch) >= batchSize {
+			flush()
 		}
-
-		symCount, refCount := idx.persistParsed(out, gitCommit, existingHashes, existingPaths)
-		result.SymbolsWritten += symCount
-		result.ReferencesWritten += refCount
 	}
+	flush()
 
 	// Handle deletions (only in full mode)
 	if mode == "full" {
@@ -162,17 +177,30 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 	return result, nil
 }
 
-// persistParsed is the serial writer half of the pipeline: it consumes a
-// parseOutcome produced by a worker and writes the file graph to SQLite
-// inside one transaction. Wrapping in a tx turns N fsyncs into 1 and is
-// the single biggest perf win for indexing.
-func (idx *Indexer) persistParsed(out parseOutcome, gitCommit string, existingHashes map[string]string, existingPaths map[string]int64) (int, int) {
-	c := out.candidate
+// persistBatch writes a group of parsed files in one SQLite transaction,
+// amortizing commit overhead across the batch. Each file runs inside its
+// own SAVEPOINT so a DB error on one file is rolled back to that point
+// and the remaining files proceed cleanly.
+// batchStats reports what actually landed after persistBatch ran. A file
+// that rolled back via SAVEPOINT or that was lost to a batch-fatal error
+// does not contribute to these counts.
+type batchStats struct {
+	filesChanged int
+	filesNew     int
+	symbols      int
+	references   int
+}
+
+func (idx *Indexer) persistBatch(batch []parseOutcome, gitCommit string, existingHashes map[string]string, existingPaths map[string]int64) batchStats {
+	var stats batchStats
+	if len(batch) == 0 {
+		return stats
+	}
 
 	tx, err := idx.Store.DB.Begin()
 	if err != nil {
-		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("begin tx for %s: %v", c.Path, err))
-		return 0, 0
+		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("begin batch tx: %v", err))
+		return stats
 	}
 	committed := false
 	defer func() {
@@ -181,10 +209,63 @@ func (idx *Indexer) persistParsed(out parseOutcome, gitCommit string, existingHa
 		}
 	}()
 
+	// Track per-file success to report accurate counters even when some
+	// files inside the batch rolled back via SAVEPOINT.
+	landed := make([]bool, len(batch))
+
+	for i, out := range batch {
+		sp := fmt.Sprintf("f%d", i)
+		if _, err := tx.Exec("SAVEPOINT " + sp); err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("savepoint for %s: %v", out.candidate.Path, err))
+			return batchStats{}
+		}
+		s, r, err := idx.persistOne(tx, out, gitCommit, existingHashes, existingPaths)
+		if err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("persisting %s: %v", out.candidate.Path, err))
+			if _, rbErr := tx.Exec("ROLLBACK TO " + sp); rbErr != nil {
+				idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("rollback-to %s: %v", sp, rbErr))
+				return batchStats{}
+			}
+		} else {
+			landed[i] = true
+			stats.symbols += s
+			stats.references += r
+		}
+		if _, err := tx.Exec("RELEASE " + sp); err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("release %s: %v", sp, err))
+			return batchStats{}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("commit batch tx: %v", err))
+		return batchStats{}
+	}
+	committed = true
+
+	for i, out := range batch {
+		if !landed[i] {
+			continue
+		}
+		stats.filesChanged++
+		if _, exists := existingHashes[out.candidate.Path]; !exists {
+			stats.filesNew++
+		}
+	}
+	return stats
+}
+
+// persistOne writes a single parsed file's graph into the caller's tx.
+// Returns a non-nil error only for DB failures that should trigger a
+// savepoint rollback; parse errors and missing-extractor cases are
+// reported as diagnostics and do not return an error.
+func (idx *Indexer) persistOne(tx store.Execer, out parseOutcome, gitCommit string, existingHashes map[string]string, existingPaths map[string]int64) (int, int, error) {
+	c := out.candidate
+
 	if _, exists := existingHashes[c.Path]; exists {
 		if existingID, ok := existingPaths[c.Path]; ok {
 			if err := idx.invalidateFile(tx, existingID); err != nil {
-				idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("invalidation failed for %s: %v", c.Path, err))
+				return 0, 0, fmt.Errorf("invalidate: %w", err)
 			}
 		}
 	}
@@ -203,12 +284,7 @@ func (idx *Indexer) persistParsed(out parseOutcome, gitCommit string, existingHa
 
 	fileID, err := idx.Store.UpsertFile(tx, fileRow)
 	if err != nil {
-		idx.Diag.Add(diag.Diagnostic{
-			Severity: diag.SeverityError,
-			Code:     diag.CodeParseError,
-			Message:  fmt.Sprintf("failed to persist file %s: %v", c.Path, err),
-		})
-		return 0, 0
+		return 0, 0, fmt.Errorf("upsert file: %w", err)
 	}
 
 	if !out.hasExtractor {
@@ -217,40 +293,24 @@ func (idx *Indexer) persistParsed(out parseOutcome, gitCommit string, existingHa
 			Code:     diag.CodeUnsupportedLang,
 			Message:  fmt.Sprintf("no extractor for %s", c.Path),
 		})
-		if err := tx.Commit(); err != nil {
-			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("commit tx for %s: %v", c.Path, err))
-			return 0, 0
-		}
-		committed = true
-		return 0, 0
+		return 0, 0, nil
 	}
 
 	if out.extractErr != nil {
 		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("extraction failed for %s: %v", c.Path, out.extractErr))
 		if err := idx.Store.SetParseStatus(tx, fileID, "error"); err != nil {
-			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update parse_status for %s: %v", c.Path, err))
+			return 0, 0, fmt.Errorf("set parse_status: %w", err)
 		}
-		if err := tx.Commit(); err != nil {
-			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("commit tx for %s: %v", c.Path, err))
-			return 0, 0
-		}
-		committed = true
-		return 0, 0
+		return 0, 0, nil
 	}
 
 	symCount, refCount, parseStatus := idx.persistExtractResult(tx, c, fileID, out.res)
 	if parseStatus != "" {
 		if err := idx.Store.SetParseStatus(tx, fileID, parseStatus); err != nil {
-			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update parse_status for %s: %v", c.Path, err))
+			return symCount, refCount, fmt.Errorf("set parse_status: %w", err)
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
-		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("commit tx for %s: %v", c.Path, err))
-		return 0, 0
-	}
-	committed = true
-	return symCount, refCount
+	return symCount, refCount, nil
 }
 
 // persistExtractResult writes the symbols, references, artifacts, and
