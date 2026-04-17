@@ -4,15 +4,30 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
 
 const SchemaVersion = 1
 
-// Open opens (or creates) a SQLite database at the given path with required pragmas.
+// Open opens (or creates) a SQLite database at the given path with the
+// pragmas Atlas relies on. `journal_mode=wal` enables writer/reader
+// concurrency; `synchronous=normal` is the WAL-recommended durability
+// level (survives crashes; may lose the last tx on power failure);
+// `cache_size=-64000` gives the page cache 64 MB; `temp_store=memory`
+// keeps intermediate query state off disk.
 func Open(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(wal)")
+	pragmas := []string{
+		"_pragma=foreign_keys(1)",
+		"_pragma=journal_mode(wal)",
+		"_pragma=synchronous(normal)",
+		"_pragma=cache_size(-64000)",
+		"_pragma=temp_store(memory)",
+	}
+	dsn := path + "?" + strings.Join(pragmas, "&")
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}

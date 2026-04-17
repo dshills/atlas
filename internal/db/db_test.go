@@ -112,6 +112,29 @@ func TestForeignKeysEnabled(t *testing.T) {
 	}
 }
 
+func TestTuningPragmas(t *testing.T) {
+	d := testDB(t)
+
+	cases := []struct {
+		pragma string
+		want   string
+	}{
+		{"journal_mode", "wal"},
+		{"synchronous", "1"},     // 1 == NORMAL
+		{"cache_size", "-64000"}, // negative means KB
+		{"temp_store", "2"},      // 2 == MEMORY
+	}
+	for _, c := range cases {
+		var got string
+		if err := d.QueryRow("PRAGMA " + c.pragma).Scan(&got); err != nil {
+			t.Fatalf("querying pragma %s: %v", c.pragma, err)
+		}
+		if got != c.want {
+			t.Errorf("pragma %s = %q, want %q", c.pragma, got, c.want)
+		}
+	}
+}
+
 func TestCheckConstraints(t *testing.T) {
 	d := testDB(t)
 	if err := Migrate(d); err != nil {
