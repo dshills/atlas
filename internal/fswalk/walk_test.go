@@ -113,6 +113,81 @@ func TestWalkGeneratedFile(t *testing.T) {
 	}
 }
 
+func TestStatCandidateHit(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "main.go", "package main")
+
+	c, ok := StatCandidate(dir, "main.go", []string{"**/*.go"}, nil, 0)
+	if !ok {
+		t.Fatal("expected StatCandidate to succeed")
+	}
+	if c.Path != "main.go" || c.Language != "go" {
+		t.Errorf("bad candidate: %+v", c)
+	}
+	if c.AbsPath != filepath.Join(dir, "main.go") {
+		t.Errorf("AbsPath = %q, want %q", c.AbsPath, filepath.Join(dir, "main.go"))
+	}
+	if c.Size == 0 || c.ModTime == 0 {
+		t.Errorf("stat fields not populated: size=%d mtime=%d", c.Size, c.ModTime)
+	}
+}
+
+func TestStatCandidateMissing(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok := StatCandidate(dir, "nope.go", nil, nil, 0); ok {
+		t.Error("expected false for missing file")
+	}
+}
+
+func TestStatCandidateExcluded(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "vendor/dep.go", "package dep")
+
+	if _, ok := StatCandidate(dir, "vendor/dep.go", []string{"**/*.go"}, []string{"vendor/**"}, 0); ok {
+		t.Error("expected exclude pattern to filter the file out")
+	}
+}
+
+func TestStatCandidateIncludeMismatch(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "readme.md", "# hello")
+
+	if _, ok := StatCandidate(dir, "readme.md", []string{"**/*.go"}, nil, 0); ok {
+		t.Error("expected include pattern to filter the file out")
+	}
+}
+
+func TestStatCandidateTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "big.go", string(make([]byte, 2048)))
+
+	if _, ok := StatCandidate(dir, "big.go", []string{"**/*.go"}, nil, 1024); ok {
+		t.Error("expected max-size filter to reject the file")
+	}
+}
+
+func TestStatCandidateUnknownLanguage(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "thing.xyz", "data")
+
+	if _, ok := StatCandidate(dir, "thing.xyz", nil, nil, 0); ok {
+		t.Error("expected unknown extension to be rejected")
+	}
+}
+
+func TestStatCandidateDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := StatCandidate(dir, "pkg", nil, nil, 0); ok {
+		t.Error("expected directories to be rejected")
+	}
+}
+
 func TestDetectLanguage(t *testing.T) {
 	tests := []struct {
 		path string
