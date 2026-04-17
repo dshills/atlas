@@ -80,6 +80,46 @@ func Walk(root string, include, exclude []string, maxFileSize int64) ([]FileCand
 	return candidates, err
 }
 
+// StatCandidate returns a FileCandidate for a single relative path under
+// root, applying the same include/exclude/size/language filters as Walk.
+// The boolean return is false if the file is filtered out, unreadable, or
+// has no recognized language. Callers use this for incremental mode to
+// avoid walking the entire tree when the diff is tiny.
+func StatCandidate(root, relPath string, include, exclude []string, maxFileSize int64) (FileCandidate, bool) {
+	relSlash := filepath.ToSlash(relPath)
+
+	if !matchesInclude(relSlash, include) {
+		return FileCandidate{}, false
+	}
+	if matchesExclude(relSlash, exclude) {
+		return FileCandidate{}, false
+	}
+
+	absPath := filepath.Join(root, relPath)
+	info, err := os.Stat(absPath)
+	if err != nil || info.IsDir() {
+		return FileCandidate{}, false
+	}
+
+	if maxFileSize > 0 && info.Size() > maxFileSize {
+		return FileCandidate{}, false
+	}
+
+	lang := DetectLanguage(absPath)
+	if lang == "" {
+		return FileCandidate{}, false
+	}
+
+	return FileCandidate{
+		Path:        relPath,
+		AbsPath:     absPath,
+		Size:        info.Size(),
+		ModTime:     info.ModTime().Unix(),
+		Language:    lang,
+		IsGenerated: isGenerated(absPath, relSlash),
+	}, true
+}
+
 // DetectLanguage returns the language for a file based on extension.
 func DetectLanguage(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))

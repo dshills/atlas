@@ -8,17 +8,28 @@ import (
 )
 
 // UpsertSymbols deletes existing symbols for a file and inserts new ones.
-func (s *Store) UpsertSymbols(fileID, packageID int64, symbols []extractor.SymbolRecord) (int, error) {
-	// Delete existing symbols for this file
-	if _, err := s.DB.Exec(`DELETE FROM symbols WHERE file_id = ?`, fileID); err != nil {
+// Uses a prepared statement; when called inside a transaction the per-row
+// INSERT cost drops substantially.
+func (s *Store) UpsertSymbols(tx Execer, fileID, packageID int64, symbols []extractor.SymbolRecord) (int, error) {
+	if _, err := tx.Exec(`DELETE FROM symbols WHERE file_id = ?`, fileID); err != nil {
 		return 0, err
 	}
+
+	if len(symbols) == 0 {
+		return 0, nil
+	}
+
+	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO symbols (file_id, package_id, name, qualified_name, symbol_kind, visibility, parent_symbol_id, signature, doc_comment, start_line, end_line, stable_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = stmt.Close() }()
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	count := 0
 
-	// Build a map of qualified_name → ID for parent resolution
-	parentMap := make(map[string]int64)
+	parentMap := make(map[string]int64, len(symbols))
 
 	for _, sym := range symbols {
 		var parentID sql.NullInt64
@@ -49,8 +60,7 @@ func (s *Store) UpsertSymbols(fileID, packageID int64, symbols []extractor.Symbo
 			endLine = sql.NullInt64{Int64: int64(sym.EndLine), Valid: true}
 		}
 
-		res, err := s.DB.Exec(`INSERT OR REPLACE INTO symbols (file_id, package_id, name, qualified_name, symbol_kind, visibility, parent_symbol_id, signature, doc_comment, start_line, end_line, stable_id, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		res, err := stmt.Exec(
 			fileID, pkgID, sym.Name, sym.QualifiedName, sym.SymbolKind, sym.Visibility,
 			parentID, sig, doc, startLine, endLine, sym.StableID, now, now)
 		if err != nil {

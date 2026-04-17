@@ -106,61 +106,9 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 			result.FilesNew++
 		}
 
-		modTime := time.Unix(c.ModTime, 0).UTC().Format(time.RFC3339)
-		parseStatus := "skipped"
-
-		fileRow := &store.FileRow{
-			Path:            c.Path,
-			Language:        c.Language,
-			ContentHash:     contentHash,
-			SizeBytes:       c.Size,
-			LastModifiedUTC: sql.NullString{String: modTime, Valid: true},
-			GitCommit:       sql.NullString{String: gitCommit, Valid: gitCommit != ""},
-			IsGenerated:     c.IsGenerated,
-			ParseStatus:     parseStatus,
-		}
-
-		// For existing files, run invalidation cascade before re-extraction
-		if _, exists := existingHashes[c.Path]; exists {
-			if existingID, ok := existingPaths[c.Path]; ok {
-				if err := idx.invalidateFile(existingID); err != nil {
-					idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("invalidation failed for %s: %v", c.Path, err))
-				}
-			}
-		}
-
-		fileID, err := idx.Store.UpsertFile(fileRow)
-		if err != nil {
-			idx.Diag.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Code:     diag.CodeParseError,
-				Message:  fmt.Sprintf("failed to persist file %s: %v", c.Path, err),
-			})
-			continue
-		}
-
-		// Run extractor if available
-		if idx.Registry != nil {
-			ext, extErr := idx.Registry.ForPath(c.Path)
-			if extErr != nil {
-				idx.Diag.Add(diag.Diagnostic{
-					Severity: diag.SeverityInfo,
-					Code:     diag.CodeUnsupportedLang,
-					Message:  fmt.Sprintf("no extractor for %s", c.Path),
-				})
-				continue
-			}
-
-			symCount, refCount, extractParseStatus := idx.extractAndPersist(ext, c, content, fileID)
-			result.SymbolsWritten += symCount
-			result.ReferencesWritten += refCount
-
-			if extractParseStatus != "" {
-				if _, err := idx.Store.DB.Exec(`UPDATE files SET parse_status = ? WHERE id = ?`, extractParseStatus, fileID); err != nil {
-					idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update parse_status for %s: %v", c.Path, err))
-				}
-			}
-		}
+		symCount, refCount := idx.processFile(c, content, contentHash, gitCommit, existingHashes, existingPaths)
+		result.SymbolsWritten += symCount
+		result.ReferencesWritten += refCount
 	}
 
 	// Handle deletions (only in full mode)
@@ -214,7 +162,82 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 	return result, nil
 }
 
-func (idx *Indexer) extractAndPersist(ext extractor.Extractor, c fswalk.FileCandidate, content []byte, fileID int64) (int, int, string) {
+// processFile runs the full invalidate → upsert → extract → persist cascade
+// for a single candidate inside one SQLite transaction. Wrapping in a tx
+// turns N fsyncs into 1 and is the single biggest perf win for indexing.
+func (idx *Indexer) processFile(c fswalk.FileCandidate, content []byte, contentHash, gitCommit string, existingHashes map[string]string, existingPaths map[string]int64) (int, int) {
+	tx, err := idx.Store.DB.Begin()
+	if err != nil {
+		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("begin tx for %s: %v", c.Path, err))
+		return 0, 0
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// For existing files, run invalidation cascade before re-extraction.
+	if _, exists := existingHashes[c.Path]; exists {
+		if existingID, ok := existingPaths[c.Path]; ok {
+			if err := idx.invalidateFile(tx, existingID); err != nil {
+				idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("invalidation failed for %s: %v", c.Path, err))
+			}
+		}
+	}
+
+	modTime := time.Unix(c.ModTime, 0).UTC().Format(time.RFC3339)
+	fileRow := &store.FileRow{
+		Path:            c.Path,
+		Language:        c.Language,
+		ContentHash:     contentHash,
+		SizeBytes:       c.Size,
+		LastModifiedUTC: sql.NullString{String: modTime, Valid: true},
+		GitCommit:       sql.NullString{String: gitCommit, Valid: gitCommit != ""},
+		IsGenerated:     c.IsGenerated,
+		ParseStatus:     "skipped",
+	}
+
+	fileID, err := idx.Store.UpsertFile(tx, fileRow)
+	if err != nil {
+		idx.Diag.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Code:     diag.CodeParseError,
+			Message:  fmt.Sprintf("failed to persist file %s: %v", c.Path, err),
+		})
+		return 0, 0
+	}
+
+	var symCount, refCount int
+	if idx.Registry != nil {
+		ext, extErr := idx.Registry.ForPath(c.Path)
+		if extErr != nil {
+			idx.Diag.Add(diag.Diagnostic{
+				Severity: diag.SeverityInfo,
+				Code:     diag.CodeUnsupportedLang,
+				Message:  fmt.Sprintf("no extractor for %s", c.Path),
+			})
+		} else {
+			var parseStatus string
+			symCount, refCount, parseStatus = idx.extractAndPersist(tx, ext, c, content, fileID)
+			if parseStatus != "" {
+				if err := idx.Store.SetParseStatus(tx, fileID, parseStatus); err != nil {
+					idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update parse_status for %s: %v", c.Path, err))
+				}
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("commit tx for %s: %v", c.Path, err))
+		return 0, 0
+	}
+	committed = true
+	return symCount, refCount
+}
+
+func (idx *Indexer) extractAndPersist(tx store.Execer, ext extractor.Extractor, c fswalk.FileCandidate, content []byte, fileID int64) (int, int, string) {
 	req := extractor.ExtractRequest{
 		FilePath:   c.Path,
 		AbsPath:    c.AbsPath,
@@ -254,15 +277,15 @@ func (idx *Indexer) extractAndPersist(ext extractor.Extractor, c fswalk.FileCand
 			DirectoryPath: res.Package.DirectoryPath,
 			Language:      res.Package.Language,
 		}
-		pid, err := idx.Store.UpsertPackage(pkgRow)
+		pid, err := idx.Store.UpsertPackage(tx, pkgRow)
 		if err != nil {
 			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to persist package for %s: %v", c.Path, err))
 		} else {
 			packageID = pid
-			_ = idx.Store.LinkFileToPackage(fileID, packageID)
+			_ = idx.Store.LinkFileToPackage(tx, fileID, packageID)
 
 			// Update denormalized fields
-			if _, err := idx.Store.DB.Exec(`UPDATE files SET package_name = ?, module_name = ? WHERE id = ?`,
+			if _, err := tx.Exec(`UPDATE files SET package_name = ?, module_name = ? WHERE id = ?`,
 				res.Package.Name, sql.NullString{String: res.Package.ImportPath, Valid: res.Package.ImportPath != ""}, fileID); err != nil {
 				idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update denormalized fields for %s: %v", c.Path, err))
 			}
@@ -272,7 +295,7 @@ func (idx *Indexer) extractAndPersist(ext extractor.Extractor, c fswalk.FileCand
 	// Persist symbols
 	symCount := 0
 	if len(res.Symbols) > 0 {
-		n, err := idx.Store.UpsertSymbols(fileID, packageID, res.Symbols)
+		n, err := idx.Store.UpsertSymbols(tx, fileID, packageID, res.Symbols)
 		if err != nil {
 			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to persist symbols for %s: %v", c.Path, err))
 		}
@@ -282,7 +305,7 @@ func (idx *Indexer) extractAndPersist(ext extractor.Extractor, c fswalk.FileCand
 	// Persist references
 	refCount := 0
 	if len(res.References) > 0 {
-		n, err := idx.Store.UpsertReferences(fileID, res.References)
+		n, err := idx.Store.UpsertReferences(tx, fileID, res.References)
 		if err != nil {
 			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to persist references for %s: %v", c.Path, err))
 		}
@@ -291,7 +314,7 @@ func (idx *Indexer) extractAndPersist(ext extractor.Extractor, c fswalk.FileCand
 
 	// Persist artifacts
 	if len(res.Artifacts) > 0 {
-		if _, err := idx.Store.UpsertArtifacts(fileID, res.Artifacts); err != nil {
+		if _, err := idx.Store.UpsertArtifacts(tx, fileID, res.Artifacts); err != nil {
 			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to persist artifacts for %s: %v", c.Path, err))
 		}
 	}
@@ -305,19 +328,13 @@ func (idx *Indexer) collectCandidates(since string) ([]fswalk.FileCandidate, err
 		if err != nil {
 			return nil, fmt.Errorf("git diff: %w", err)
 		}
-		allCandidates, err := fswalk.Walk(idx.RepoRoot, idx.Config.Include, idx.Config.Exclude, idx.Config.Indexing.MaxFileSizeBytes)
-		if err != nil {
-			return nil, fmt.Errorf("walking: %w", err)
-		}
-		diffSet := make(map[string]bool, len(diffFiles))
-		for _, f := range diffFiles {
-			diffSet[f] = true
-		}
-		var candidates []fswalk.FileCandidate
-		for _, c := range allCandidates {
-			if diffSet[c.Path] {
-				candidates = append(candidates, c)
+		candidates := make([]fswalk.FileCandidate, 0, len(diffFiles))
+		for _, rel := range diffFiles {
+			c, ok := fswalk.StatCandidate(idx.RepoRoot, rel, idx.Config.Include, idx.Config.Exclude, idx.Config.Indexing.MaxFileSizeBytes)
+			if !ok {
+				continue
 			}
+			candidates = append(candidates, c)
 		}
 		return candidates, nil
 	}
@@ -351,32 +368,22 @@ func (idx *Indexer) generateSummaries() {
 		}
 		_ = rows.Close()
 
-		for _, fid := range fileIDs {
-			if idx.Config.Summaries.File {
+		if idx.Config.Summaries.File {
+			for _, fid := range fileIDs {
 				if err := gen.GenerateFileSummary(fid); err != nil {
 					idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("file summary generation failed: %v", err))
 				}
 			}
-			if idx.Config.Summaries.Symbol {
-				symRows, err := idx.Store.DB.Query(`SELECT id FROM symbols WHERE file_id = ?`, fid)
-				if err != nil {
-					idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("querying symbols for summaries: %v", err))
-					continue
-				}
-				var symIDs []int64
-				for symRows.Next() {
-					var sid int64
-					if err := symRows.Scan(&sid); err != nil {
-						_ = symRows.Close()
-						break
-					}
-					symIDs = append(symIDs, sid)
-				}
-				_ = symRows.Close()
-				for _, sid := range symIDs {
-					if err := gen.GenerateSymbolSummary(sid); err != nil {
-						idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("symbol summary generation failed: %v", err))
-					}
+		}
+
+		if idx.Config.Summaries.Symbol && len(fileIDs) > 0 {
+			symIDs, err := idx.loadSymbolIDsForFiles(fileIDs)
+			if err != nil {
+				idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("querying symbols for summaries: %v", err))
+			}
+			for _, sid := range symIDs {
+				if err := gen.GenerateSymbolSummary(sid); err != nil {
+					idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("symbol summary generation failed: %v", err))
 				}
 			}
 		}
@@ -387,6 +394,48 @@ func (idx *Indexer) generateSummaries() {
 			idx.Diag.AddWarning(diag.CodeParseError, fmt.Sprintf("package summary generation failed: %v", err))
 		}
 	}
+}
+
+// loadSymbolIDsForFiles returns all symbol IDs belonging to the given file IDs
+// in a single query, replacing an N+1 loop of per-file SELECTs. SQLite
+// parameter limits (999 by default) force us to chunk large ID lists.
+func (idx *Indexer) loadSymbolIDsForFiles(fileIDs []int64) ([]int64, error) {
+	const chunk = 500
+	symIDs := make([]int64, 0, len(fileIDs)*4)
+
+	for start := 0; start < len(fileIDs); start += chunk {
+		end := min(start+chunk, len(fileIDs))
+		batch := fileIDs[start:end]
+
+		placeholders := make([]byte, 0, len(batch)*2)
+		args := make([]any, 0, len(batch))
+		for i, id := range batch {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args = append(args, id)
+		}
+
+		query := `SELECT id FROM symbols WHERE file_id IN (` + string(placeholders) + `)`
+		rows, err := idx.Store.DB.Query(query, args...)
+		if err != nil {
+			return symIDs, err
+		}
+		for rows.Next() {
+			var sid int64
+			if err := rows.Scan(&sid); err != nil {
+				_ = rows.Close()
+				return symIDs, err
+			}
+			symIDs = append(symIDs, sid)
+		}
+		if err := rows.Close(); err != nil {
+			return symIDs, err
+		}
+	}
+
+	return symIDs, nil
 }
 
 // ClearAll removes all derived data for a full reindex.

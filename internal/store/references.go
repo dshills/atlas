@@ -8,11 +8,22 @@ import (
 )
 
 // UpsertReferences deletes existing references from a file and inserts new ones.
-func (s *Store) UpsertReferences(fileID int64, refs []extractor.ReferenceRecord) (int, error) {
-	// Delete outgoing references from this file
-	if _, err := s.DB.Exec(`DELETE FROM "references" WHERE from_file_id = ?`, fileID); err != nil {
+// Uses a prepared statement so that large reference lists don't re-parse SQL.
+func (s *Store) UpsertReferences(tx Execer, fileID int64, refs []extractor.ReferenceRecord) (int, error) {
+	if _, err := tx.Exec(`DELETE FROM "references" WHERE from_file_id = ?`, fileID); err != nil {
 		return 0, err
 	}
+
+	if len(refs) == 0 {
+		return 0, nil
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO "references" (from_file_id, reference_kind, confidence, line, column_start, column_end, raw_target_text, is_resolved, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = stmt.Close() }()
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	count := 0
@@ -34,10 +45,7 @@ func (s *Store) UpsertReferences(fileID int64, refs []extractor.ReferenceRecord)
 			rawTarget = sql.NullString{String: ref.RawTargetText, Valid: true}
 		}
 
-		_, err := s.DB.Exec(`INSERT INTO "references" (from_file_id, reference_kind, confidence, line, column_start, column_end, raw_target_text, is_resolved, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-			fileID, ref.ReferenceKind, ref.Confidence, line, colStart, colEnd, rawTarget, now)
-		if err != nil {
+		if _, err := stmt.Exec(fileID, ref.ReferenceKind, ref.Confidence, line, colStart, colEnd, rawTarget, now); err != nil {
 			return count, err
 		}
 		count++

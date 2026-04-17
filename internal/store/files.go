@@ -32,16 +32,17 @@ type FileRow struct {
 	UpdatedAt       string
 }
 
-// UpsertFile inserts or updates a file row.
-func (s *Store) UpsertFile(f *FileRow) (int64, error) {
+// UpsertFile inserts or updates a file row using the provided Execer.
+// Pass s.DB for auto-commit semantics, or a *sql.Tx to batch with other writes.
+func (s *Store) UpsertFile(tx Execer, f *FileRow) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	var existingID int64
-	err := s.DB.QueryRow(`SELECT id FROM files WHERE path = ?`, f.Path).Scan(&existingID)
+	err := tx.QueryRow(`SELECT id FROM files WHERE path = ?`, f.Path).Scan(&existingID)
 	if err == sql.ErrNoRows {
 		f.CreatedAt = now
 		f.UpdatedAt = now
-		res, err := s.DB.Exec(`INSERT INTO files (path, language, package_name, module_name, content_hash, size_bytes, last_modified_utc, git_commit, is_generated, parse_status, created_at, updated_at)
+		res, err := tx.Exec(`INSERT INTO files (path, language, package_name, module_name, content_hash, size_bytes, last_modified_utc, git_commit, is_generated, parse_status, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			f.Path, f.Language, f.PackageName, f.ModuleName, f.ContentHash, f.SizeBytes, f.LastModifiedUTC, f.GitCommit,
 			boolToInt(f.IsGenerated), f.ParseStatus, f.CreatedAt, f.UpdatedAt)
@@ -55,7 +56,7 @@ func (s *Store) UpsertFile(f *FileRow) (int64, error) {
 	}
 
 	f.UpdatedAt = now
-	_, err = s.DB.Exec(`UPDATE files SET language=?, package_name=?, module_name=?, content_hash=?, size_bytes=?, last_modified_utc=?, git_commit=?, is_generated=?, parse_status=?, updated_at=?
+	_, err = tx.Exec(`UPDATE files SET language=?, package_name=?, module_name=?, content_hash=?, size_bytes=?, last_modified_utc=?, git_commit=?, is_generated=?, parse_status=?, updated_at=?
 		WHERE id=?`,
 		f.Language, f.PackageName, f.ModuleName, f.ContentHash, f.SizeBytes, f.LastModifiedUTC, f.GitCommit,
 		boolToInt(f.IsGenerated), f.ParseStatus, f.UpdatedAt, existingID)
@@ -63,6 +64,12 @@ func (s *Store) UpsertFile(f *FileRow) (int64, error) {
 		return 0, err
 	}
 	return existingID, nil
+}
+
+// SetParseStatus updates only the parse_status column for a file.
+func (s *Store) SetParseStatus(tx Execer, fileID int64, status string) error {
+	_, err := tx.Exec(`UPDATE files SET parse_status = ? WHERE id = ?`, status, fileID)
+	return err
 }
 
 // GetFileByPath retrieves a file by path.
