@@ -29,6 +29,7 @@ func DefaultConfig() Config {
 		},
 		Indexing: IndexingConfig{
 			MaxFileSizeBytes: DefaultMaxFileSize,
+			Workers:          0,
 		},
 		Summaries: SummaryConfig{
 			Enabled: true,
@@ -85,6 +86,7 @@ languages:
   lua: true
 indexing:
   max_file_size_bytes: 1048576
+  workers: 0  # 0 = runtime.NumCPU()
 summaries:
   enabled: true
   file: true

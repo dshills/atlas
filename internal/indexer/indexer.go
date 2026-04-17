@@ -4,14 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/dshills/atlas/internal/config"
 	"github.com/dshills/atlas/internal/diag"
 	"github.com/dshills/atlas/internal/extractor"
 	"github.com/dshills/atlas/internal/fswalk"
-	"github.com/dshills/atlas/internal/hash"
 	"github.com/dshills/atlas/internal/store"
 	"github.com/dshills/atlas/internal/summary"
 	"github.com/dshills/atlas/internal/vcs"
@@ -82,31 +80,33 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 	}
 
 	seenPaths := make(map[string]bool, len(candidates))
-
 	for _, c := range candidates {
 		seenPaths[c.Path] = true
+	}
 
-		content, err := os.ReadFile(c.AbsPath)
-		if err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	results := idx.runParseWorkers(ctx, candidates, existingHashes)
+
+	for out := range results {
+		if out.readErr != nil {
 			idx.Diag.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Code:     diag.CodeFileMissing,
-				Message:  fmt.Sprintf("cannot read file %s: %v", c.Path, err),
+				Message:  fmt.Sprintf("cannot read file %s: %v", out.candidate.Path, out.readErr),
 			})
 			continue
 		}
-
-		contentHash := hash.Hash(content)
-		if existingHash, exists := existingHashes[c.Path]; exists && existingHash == contentHash {
+		if out.skipped {
 			continue
 		}
 
 		result.FilesChanged++
-		if _, exists := existingHashes[c.Path]; !exists {
+		if _, exists := existingHashes[out.candidate.Path]; !exists {
 			result.FilesNew++
 		}
 
-		symCount, refCount := idx.processFile(c, content, contentHash, gitCommit, existingHashes, existingPaths)
+		symCount, refCount := idx.persistParsed(out, gitCommit, existingHashes, existingPaths)
 		result.SymbolsWritten += symCount
 		result.ReferencesWritten += refCount
 	}
@@ -162,10 +162,13 @@ func (idx *Indexer) Run(mode string, since string) (*RunResult, error) {
 	return result, nil
 }
 
-// processFile runs the full invalidate → upsert → extract → persist cascade
-// for a single candidate inside one SQLite transaction. Wrapping in a tx
-// turns N fsyncs into 1 and is the single biggest perf win for indexing.
-func (idx *Indexer) processFile(c fswalk.FileCandidate, content []byte, contentHash, gitCommit string, existingHashes map[string]string, existingPaths map[string]int64) (int, int) {
+// persistParsed is the serial writer half of the pipeline: it consumes a
+// parseOutcome produced by a worker and writes the file graph to SQLite
+// inside one transaction. Wrapping in a tx turns N fsyncs into 1 and is
+// the single biggest perf win for indexing.
+func (idx *Indexer) persistParsed(out parseOutcome, gitCommit string, existingHashes map[string]string, existingPaths map[string]int64) (int, int) {
+	c := out.candidate
+
 	tx, err := idx.Store.DB.Begin()
 	if err != nil {
 		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("begin tx for %s: %v", c.Path, err))
@@ -178,7 +181,6 @@ func (idx *Indexer) processFile(c fswalk.FileCandidate, content []byte, contentH
 		}
 	}()
 
-	// For existing files, run invalidation cascade before re-extraction.
 	if _, exists := existingHashes[c.Path]; exists {
 		if existingID, ok := existingPaths[c.Path]; ok {
 			if err := idx.invalidateFile(tx, existingID); err != nil {
@@ -191,7 +193,7 @@ func (idx *Indexer) processFile(c fswalk.FileCandidate, content []byte, contentH
 	fileRow := &store.FileRow{
 		Path:            c.Path,
 		Language:        c.Language,
-		ContentHash:     contentHash,
+		ContentHash:     out.contentHash,
 		SizeBytes:       c.Size,
 		LastModifiedUTC: sql.NullString{String: modTime, Valid: true},
 		GitCommit:       sql.NullString{String: gitCommit, Valid: gitCommit != ""},
@@ -209,23 +211,37 @@ func (idx *Indexer) processFile(c fswalk.FileCandidate, content []byte, contentH
 		return 0, 0
 	}
 
-	var symCount, refCount int
-	if idx.Registry != nil {
-		ext, extErr := idx.Registry.ForPath(c.Path)
-		if extErr != nil {
-			idx.Diag.Add(diag.Diagnostic{
-				Severity: diag.SeverityInfo,
-				Code:     diag.CodeUnsupportedLang,
-				Message:  fmt.Sprintf("no extractor for %s", c.Path),
-			})
-		} else {
-			var parseStatus string
-			symCount, refCount, parseStatus = idx.extractAndPersist(tx, ext, c, content, fileID)
-			if parseStatus != "" {
-				if err := idx.Store.SetParseStatus(tx, fileID, parseStatus); err != nil {
-					idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update parse_status for %s: %v", c.Path, err))
-				}
-			}
+	if !out.hasExtractor {
+		idx.Diag.Add(diag.Diagnostic{
+			Severity: diag.SeverityInfo,
+			Code:     diag.CodeUnsupportedLang,
+			Message:  fmt.Sprintf("no extractor for %s", c.Path),
+		})
+		if err := tx.Commit(); err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("commit tx for %s: %v", c.Path, err))
+			return 0, 0
+		}
+		committed = true
+		return 0, 0
+	}
+
+	if out.extractErr != nil {
+		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("extraction failed for %s: %v", c.Path, out.extractErr))
+		if err := idx.Store.SetParseStatus(tx, fileID, "error"); err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update parse_status for %s: %v", c.Path, err))
+		}
+		if err := tx.Commit(); err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("commit tx for %s: %v", c.Path, err))
+			return 0, 0
+		}
+		committed = true
+		return 0, 0
+	}
+
+	symCount, refCount, parseStatus := idx.persistExtractResult(tx, c, fileID, out.res)
+	if parseStatus != "" {
+		if err := idx.Store.SetParseStatus(tx, fileID, parseStatus); err != nil {
+			idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("failed to update parse_status for %s: %v", c.Path, err))
 		}
 	}
 
@@ -237,21 +253,10 @@ func (idx *Indexer) processFile(c fswalk.FileCandidate, content []byte, contentH
 	return symCount, refCount
 }
 
-func (idx *Indexer) extractAndPersist(tx store.Execer, ext extractor.Extractor, c fswalk.FileCandidate, content []byte, fileID int64) (int, int, string) {
-	req := extractor.ExtractRequest{
-		FilePath:   c.Path,
-		AbsPath:    c.AbsPath,
-		Content:    content,
-		RepoRoot:   idx.RepoRoot,
-		ModulePath: idx.ModulePath,
-	}
-
-	res, err := ext.Extract(context.Background(), req)
-	if err != nil {
-		idx.Diag.AddError(diag.CodeParseError, fmt.Sprintf("extraction failed for %s: %v", c.Path, err))
-		return 0, 0, "error"
-	}
-
+// persistExtractResult writes the symbols, references, artifacts, and
+// package produced by a worker's extractor call into the given tx. It is
+// the DB-bound counterpart to parseOne.
+func (idx *Indexer) persistExtractResult(tx store.Execer, c fswalk.FileCandidate, fileID int64, res *extractor.ExtractResult) (int, int, string) {
 	// Record diagnostics from extraction
 	for _, d := range res.Diagnostics {
 		idx.Diag.Add(diag.Diagnostic{

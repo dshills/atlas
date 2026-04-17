@@ -37,6 +37,9 @@ type LanguageConfig struct {
 // IndexingConfig controls indexing behavior.
 type IndexingConfig struct {
 	MaxFileSizeBytes int64 `yaml:"max_file_size_bytes" json:"max_file_size_bytes"`
+	// Workers sets the number of parallel file-parsing workers. 0 means
+	// runtime.NumCPU(). Persistence is always serialized on a single writer.
+	Workers int `yaml:"workers" json:"workers"`
 }
 
 // SummaryConfig controls summary generation.
