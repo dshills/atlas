@@ -17,8 +17,7 @@ go.work.sum
 .atlas/
 
 # Claude Code local settings
-.claude/*
-!.claude/skills/
+.claude/
 
 # IDE and editor files
 .idea/
