@@ -42,22 +42,47 @@ If atlas has the answer, do not use Read or Bash(cat).
 Atlas is authoritative — its index is maintained by a PostToolUse hook on Write/Edit/MultiEdit.
 `
 
+type hookTarget struct {
+	name         string
+	displayName  string
+	settingsPath func(string) string
+}
+
+var (
+	claudeHookTarget = hookTarget{
+		name:         "claude",
+		displayName:  "Claude Code",
+		settingsPath: settingsPath,
+	}
+	codexHookTarget = hookTarget{
+		name:         "codex",
+		displayName:  "Codex",
+		settingsPath: codexSettingsPath,
+	}
+)
+
 // HookCmd creates the `atlas hook` command with install/uninstall subcommands.
 func HookCmd(ctx *CLIContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hook",
-		Short: "Manage Claude Code integration hooks",
-		Long: `Manage Claude Code integration hooks for automatic re-indexing.
+		Short: "Manage agent integration hooks",
+		Long: `Manage agent integration hooks for automatic re-indexing.
 
 Subcommands:
   install     Install PostToolUse hook (re-indexes after Write/Edit/MultiEdit)
   uninstall   Remove the Atlas hook
   status      Check if the hook is installed
 
+By default, hook commands target Claude Code for backward compatibility.
+Use --codex to target Codex instead.
+
 The install command accepts --claude-md to also write Code Search Protocol
-instructions to your project's CLAUDE.md.`,
+instructions to your project's CLAUDE.md, or --codex-md to install the Codex
+hook and write instructions to AGENTS.md.`,
 		Example: `  atlas hook install              # install the auto-reindex hook
   atlas hook install --claude-md  # install hook + write CLAUDE.md instructions
+  atlas hook install --codex-md   # install Codex hook + write AGENTS.md instructions
+  atlas hook status --codex       # check if Codex hook is installed
   atlas hook status               # check if hook is installed
   atlas hook uninstall            # remove the hook`,
 	}
@@ -73,6 +98,10 @@ instructions to your project's CLAUDE.md.`,
 
 func settingsPath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".claude", "settings.json")
+}
+
+func codexSettingsPath(repoRoot string) string {
+	return filepath.Join(repoRoot, ".codex", "hooks.json")
 }
 
 func loadSettings(path string) (map[string]any, error) {
@@ -239,21 +268,33 @@ func removeAtlasHook(settings map[string]any) bool {
 	return removed
 }
 
+func hasAtlasInstructions(content []byte) bool {
+	return strings.Contains(string(content), "## Code Search Protocol") || strings.Contains(string(content), "## Atlas Index")
+}
+
 func writeClaudeMD(repoRoot string) (string, error) {
-	mdPath := filepath.Join(repoRoot, "CLAUDE.md")
+	return writeInstructionsMD(repoRoot, "CLAUDE.md")
+}
+
+func writeAgentsMD(repoRoot string) (string, error) {
+	return writeInstructionsMD(repoRoot, "AGENTS.md")
+}
+
+func writeInstructionsMD(repoRoot, fileName string) (string, error) {
+	mdPath := filepath.Join(repoRoot, fileName)
 
 	existing, err := os.ReadFile(mdPath)
 	if err != nil && !os.IsNotExist(err) {
-		return mdPath, fmt.Errorf("reading CLAUDE.md: %w", err)
+		return mdPath, fmt.Errorf("reading %s: %w", fileName, err)
 	}
 
-	if strings.Contains(string(existing), "## Code Search Protocol") || strings.Contains(string(existing), "## Atlas Index") {
+	if hasAtlasInstructions(existing) {
 		return mdPath, nil // already has Atlas section
 	}
 
 	f, err := os.OpenFile(mdPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return mdPath, fmt.Errorf("opening CLAUDE.md: %w", err)
+		return mdPath, fmt.Errorf("opening %s: %w", fileName, err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -267,56 +308,100 @@ func writeClaudeMD(repoRoot string) (string, error) {
 	}
 
 	if _, err := f.WriteString(content); err != nil {
-		return mdPath, fmt.Errorf("writing CLAUDE.md: %w", err)
+		return mdPath, fmt.Errorf("writing %s: %w", fileName, err)
 	}
 
 	return mdPath, nil
 }
 
+func hookTargets(flagCodex, flagAll bool) []hookTarget {
+	if flagAll {
+		return []hookTarget{claudeHookTarget, codexHookTarget}
+	}
+	if flagCodex {
+		return []hookTarget{codexHookTarget}
+	}
+	return []hookTarget{claudeHookTarget}
+}
+
+func installOutputKeys(target hookTarget, singleDefault bool) (hookKey, settingsKey string) {
+	if singleDefault {
+		return "Hook", "Settings"
+	}
+	return target.displayName + " Hook", target.displayName + " Settings"
+}
+
 func hookInstallCmd(ctx *CLIContext) *cobra.Command {
 	var flagClaudeMD bool
+	var flagCodex bool
+	var flagCodexMD bool
+	var flagAgentsMD bool
+	var flagAll bool
 
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install Claude Code PostToolUse hook for automatic re-indexing",
+		Short: "Install PostToolUse hook for automatic re-indexing",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, err := ctx.RepoRoot()
 			if err != nil {
 				return fmt.Errorf("finding repo root: %w", err)
 			}
 
-			path := settingsPath(repoRoot)
-			settings, err := loadSettings(path)
-			if err != nil {
-				return fmt.Errorf("reading settings: %w", err)
+			if flagCodexMD || flagAgentsMD {
+				flagCodex = true
 			}
 
-			hookStatus := "installed"
-			if hasAtlasHook(settings) {
-				hookStatus = "already installed"
-			} else {
-				addAtlasHook(settings)
-				if err := saveSettings(path, settings); err != nil {
-					return fmt.Errorf("writing settings: %w", err)
+			targets := hookTargets(flagCodex, flagAll || (flagCodex && flagClaudeMD))
+			singleDefault := len(targets) == 1 && targets[0].name == "claude" && !flagCodex && !flagAll
+
+			var kvs []output.KV
+			for _, target := range targets {
+				path := target.settingsPath(repoRoot)
+				settings, err := loadSettings(path)
+				if err != nil {
+					return fmt.Errorf("reading %s settings: %w", target.displayName, err)
 				}
-			}
 
-			kvs := []output.KV{
-				{Key: "Hook", Value: hookStatus},
-				{Key: "Settings", Value: path},
+				hookStatus := "installed"
+				if hasAtlasHook(settings) {
+					hookStatus = "already installed"
+				} else {
+					addAtlasHook(settings)
+					if err := saveSettings(path, settings); err != nil {
+						return fmt.Errorf("writing %s settings: %w", target.displayName, err)
+					}
+				}
+
+				hookKey, settingsKey := installOutputKeys(target, singleDefault)
+				kvs = append(kvs,
+					output.KV{Key: hookKey, Value: hookStatus},
+					output.KV{Key: settingsKey, Value: path},
+				)
 			}
 
 			if flagClaudeMD {
-				mdPath, err := writeClaudeMD(repoRoot)
-				if err != nil {
+				existing, _ := os.ReadFile(filepath.Join(repoRoot, "CLAUDE.md"))
+				alreadyPresent := hasAtlasInstructions(existing)
+				if _, err := writeClaudeMD(repoRoot); err != nil {
 					return err
 				}
 				mdStatus := "written"
-				existing, _ := os.ReadFile(mdPath)
-				if strings.Contains(string(existing), "## Code Search Protocol") || strings.Contains(string(existing), "## Atlas Index") {
+				if alreadyPresent {
 					mdStatus = "already present"
 				}
 				kvs = append(kvs, output.KV{Key: "CLAUDE.md", Value: mdStatus})
+			}
+			if flagCodexMD || flagAgentsMD {
+				existing, _ := os.ReadFile(filepath.Join(repoRoot, "AGENTS.md"))
+				alreadyPresent := hasAtlasInstructions(existing)
+				if _, err := writeAgentsMD(repoRoot); err != nil {
+					return err
+				}
+				mdStatus := "written"
+				if alreadyPresent {
+					mdStatus = "already present"
+				}
+				kvs = append(kvs, output.KV{Key: "AGENTS.md", Value: mdStatus})
 			}
 
 			f := ctx.Formatter()
@@ -331,81 +416,131 @@ func hookInstallCmd(ctx *CLIContext) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&flagClaudeMD, "claude-md", false, "Also write Atlas instructions to CLAUDE.md")
+	cmd.Flags().BoolVar(&flagCodex, "codex", false, "Install hook in .codex/hooks.json instead of .claude/settings.json")
+	cmd.Flags().BoolVar(&flagCodexMD, "codex-md", false, "Install Codex hook and write Atlas instructions to AGENTS.md")
+	cmd.Flags().BoolVar(&flagAgentsMD, "agents-md", false, "Also write Atlas instructions to AGENTS.md")
+	cmd.Flags().BoolVar(&flagAll, "all", false, "Install hooks for all supported agents")
 	return cmd
 }
 
 func hookUninstallCmd(ctx *CLIContext) *cobra.Command {
-	return &cobra.Command{
+	var flagCodex bool
+	var flagAll bool
+
+	cmd := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove Claude Code Atlas hook",
+		Short: "Remove Atlas hook",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, err := ctx.RepoRoot()
 			if err != nil {
 				return fmt.Errorf("finding repo root: %w", err)
 			}
 
-			path := settingsPath(repoRoot)
-			settings, err := loadSettings(path)
-			if err != nil {
-				return fmt.Errorf("reading settings: %w", err)
-			}
-
-			if !removeAtlasHook(settings) {
-				f := ctx.Formatter()
-				if ctx.OutputMode() == output.ModeText {
-					return f.WriteText([]output.KV{
-						{Key: "Status", Value: "not installed"},
-					})
+			targets := hookTargets(flagCodex, flagAll)
+			var kvs []output.KV
+			jsonResult := make(map[string]string)
+			for _, target := range targets {
+				path := target.settingsPath(repoRoot)
+				settings, err := loadSettings(path)
+				if err != nil {
+					return fmt.Errorf("reading %s settings: %w", target.displayName, err)
 				}
-				return f.Write(map[string]string{"status": "not_installed"})
-			}
 
-			if err := saveSettings(path, settings); err != nil {
-				return fmt.Errorf("writing settings: %w", err)
-			}
+				status := "not installed"
+				if removeAtlasHook(settings) {
+					if err := saveSettings(path, settings); err != nil {
+						return fmt.Errorf("writing %s settings: %w", target.displayName, err)
+					}
+					status = "uninstalled"
+				}
 
+				if len(targets) == 1 && target.name == "claude" && !flagCodex && !flagAll {
+					kvs = append(kvs, output.KV{Key: "Status", Value: status})
+					if status == "uninstalled" {
+						kvs = append(kvs, output.KV{Key: "File", Value: path})
+					}
+					jsonStatus := "not_installed"
+					if status == "uninstalled" {
+						jsonStatus = "uninstalled"
+						jsonResult["file"] = path
+					}
+					jsonResult["status"] = jsonStatus
+					continue
+				}
+
+				kvs = append(kvs,
+					output.KV{Key: target.displayName, Value: status},
+					output.KV{Key: target.displayName + " File", Value: path},
+				)
+				jsonResult[target.name+"_status"] = strings.ReplaceAll(status, " ", "_")
+				jsonResult[target.name+"_file"] = path
+			}
 			f := ctx.Formatter()
 			if ctx.OutputMode() == output.ModeText {
-				return f.WriteText([]output.KV{
-					{Key: "Status", Value: "uninstalled"},
-					{Key: "File", Value: path},
-				})
+				return f.WriteText(kvs)
 			}
-			return f.Write(map[string]string{"status": "uninstalled", "file": path})
+			return f.Write(jsonResult)
 		},
 	}
+	cmd.Flags().BoolVar(&flagCodex, "codex", false, "Remove hook from .codex/hooks.json instead of .claude/settings.json")
+	cmd.Flags().BoolVar(&flagAll, "all", false, "Remove hooks for all supported agents")
+	return cmd
 }
 
 func hookStatusCmd(ctx *CLIContext) *cobra.Command {
-	return &cobra.Command{
+	var flagCodex bool
+	var flagAll bool
+
+	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Check if Claude Code Atlas hook is installed",
+		Short: "Check if Atlas hook is installed",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, err := ctx.RepoRoot()
 			if err != nil {
 				return fmt.Errorf("finding repo root: %w", err)
 			}
 
-			path := settingsPath(repoRoot)
-			settings, err := loadSettings(path)
-			if err != nil {
-				return fmt.Errorf("reading settings: %w", err)
-			}
+			targets := hookTargets(flagCodex, flagAll)
+			var kvs []output.KV
+			jsonResult := make(map[string]string)
+			for _, target := range targets {
+				path := target.settingsPath(repoRoot)
+				settings, err := loadSettings(path)
+				if err != nil {
+					return fmt.Errorf("reading %s settings: %w", target.displayName, err)
+				}
 
-			installed := hasAtlasHook(settings)
-			status := "not installed"
-			if installed {
-				status = "installed"
+				status := "not installed"
+				if hasAtlasHook(settings) {
+					status = "installed"
+				}
+
+				if len(targets) == 1 && target.name == "claude" && !flagCodex && !flagAll {
+					kvs = append(kvs,
+						output.KV{Key: "Hook", Value: status},
+						output.KV{Key: "File", Value: path},
+					)
+					jsonResult["status"] = status
+					jsonResult["file"] = path
+					continue
+				}
+
+				kvs = append(kvs,
+					output.KV{Key: target.displayName, Value: status},
+					output.KV{Key: target.displayName + " File", Value: path},
+				)
+				jsonResult[target.name+"_status"] = status
+				jsonResult[target.name+"_file"] = path
 			}
 
 			f := ctx.Formatter()
 			if ctx.OutputMode() == output.ModeText {
-				return f.WriteText([]output.KV{
-					{Key: "Hook", Value: status},
-					{Key: "File", Value: path},
-				})
+				return f.WriteText(kvs)
 			}
-			return f.Write(map[string]string{"status": status, "file": path})
+			return f.Write(jsonResult)
 		},
 	}
+	cmd.Flags().BoolVar(&flagCodex, "codex", false, "Check hook in .codex/hooks.json instead of .claude/settings.json")
+	cmd.Flags().BoolVar(&flagAll, "all", false, "Check hooks for all supported agents")
+	return cmd
 }

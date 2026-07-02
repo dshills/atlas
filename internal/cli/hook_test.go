@@ -29,6 +29,27 @@ func TestHookInstallCreatesSettings(t *testing.T) {
 	}
 }
 
+func TestHookInstallCreatesCodexHooks(t *testing.T) {
+	dir := t.TempDir()
+	path := codexSettingsPath(dir)
+
+	settings := make(map[string]any)
+	addAtlasHook(settings)
+
+	if err := saveSettings(path, settings); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !hasAtlasHook(loaded) {
+		t.Error("expected atlas hook to be installed")
+	}
+}
+
 func TestHookInstallPreservesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".claude", "settings.json")
@@ -176,6 +197,30 @@ func TestWriteClaudeMDCreatesFile(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "atlas find symbol") {
 		t.Error("expected CLAUDE.md to contain atlas command examples")
+	}
+}
+
+func TestWriteAgentsMDCreatesFile(t *testing.T) {
+	dir := t.TempDir()
+
+	mdPath, err := writeAgentsMD(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if filepath.Base(mdPath) != "AGENTS.md" {
+		t.Fatalf("expected AGENTS.md, got %s", mdPath)
+	}
+	if !strings.Contains(string(content), "## Code Search Protocol") {
+		t.Error("expected AGENTS.md to contain Code Search Protocol section")
+	}
+	if !strings.Contains(string(content), "atlas find symbol") {
+		t.Error("expected AGENTS.md to contain atlas command examples")
 	}
 }
 

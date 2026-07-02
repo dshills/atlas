@@ -48,7 +48,7 @@ atlas index
 atlas stats
 ```
 
-### Set Up Claude Code Integration
+### Set Up Agent Integration
 
 ```bash
 # Install the auto-reindex hook (runs atlas index after Write/Edit/MultiEdit)
@@ -56,9 +56,12 @@ atlas hook install
 
 # Also write Code Search Protocol instructions to CLAUDE.md
 atlas hook install --claude-md
+
+# Install Codex hook and write Code Search Protocol instructions to AGENTS.md
+atlas hook install --codex-md
 ```
 
-This keeps the index fresh automatically as Claude edits files, and teaches it to prefer atlas queries over reading source.
+This keeps the index fresh automatically as Claude Code or Codex edits files, and teaches the agent to prefer atlas queries over reading source.
 
 ### Basic Queries
 
@@ -174,9 +177,9 @@ Summaries are deterministic aggregations of indexed data (not LLM-generated). Th
 | `atlas doctor` | Run 8 health checks (storage, DB, schema, manifest, runs, stale summaries, missing files, SQLite integrity) |
 | `atlas validate` | Run 12 integrity checks (FK violations, orphaned symbols, stale summaries, denormalized field consistency, length constraints) |
 | `atlas validate --strict` | Additionally check that all files matching include globs are indexed |
-| `atlas hook install` | Install Claude Code PostToolUse hook for automatic re-indexing (`--claude-md` to also write CLAUDE.md instructions) |
-| `atlas hook uninstall` | Remove the Claude Code hook |
-| `atlas hook status` | Check if the hook is installed |
+| `atlas hook install` | Install agent PostToolUse hook for automatic re-indexing (`--claude-md`, `--codex-md`, `--codex`, `--all`) |
+| `atlas hook uninstall` | Remove the agent hook (`--codex` or `--all` for non-default targets) |
+| `atlas hook status` | Check if the hook is installed (`--codex` or `--all` for non-default targets) |
 
 ### Export
 
@@ -318,19 +321,25 @@ atlas init && atlas index
 
 # Install Claude Code hook for automatic re-indexing
 atlas hook install
+
+# Or install Codex hook + AGENTS.md instructions
+atlas hook install --codex-md
 ```
 
 The `atlas hook install` command adds a `PostToolUse` hook to `.claude/settings.json` that runs `atlas index` after Write, Edit, or MultiEdit operations. This keeps the index fresh as Claude makes changes — no manual re-indexing needed.
 
-Use `--claude-md` to also append Atlas usage instructions to your project's `CLAUDE.md`:
+Use `--claude-md` to also append Atlas usage instructions to your project's `CLAUDE.md`, or `--codex-md` to install the Codex hook in `.codex/hooks.json` and append the same instructions to `AGENTS.md`:
 
 ```bash
 atlas hook install --claude-md   # Install hook + write CLAUDE.md instructions
+atlas hook install --codex-md    # Install Codex hook + write AGENTS.md instructions
 ```
 
 ```bash
-atlas hook status      # Check if hook is installed
-atlas hook uninstall   # Remove the hook
+atlas hook status         # Check if Claude Code hook is installed
+atlas hook status --codex # Check if Codex hook is installed
+atlas hook uninstall      # Remove the Claude Code hook
+atlas hook uninstall --codex
 ```
 
 ### Recommended Agent Workflow

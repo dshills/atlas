@@ -48,13 +48,14 @@ Key command groups:
   list        List packages, routes, jobs, migrations, integrations, entrypoints
   export      Export index data as stable JSON
   summarize   Generate file, package, or symbol summaries
-  hook        Manage Claude Code integration hooks
+  hook        Manage agent integration hooks
 
 Use "atlas [command] --help" for subcommands and flags within each group.`,
 		Example: `  atlas init && atlas index          # set up a new repository
   atlas find symbol HandleRequest    # find a symbol definition
   atlas who-calls main.Run           # find callers
-  atlas hook install --claude-md     # install Claude Code hook + instructions`,
+  atlas hook install --claude-md     # install Claude Code hook + instructions
+  atlas hook install --codex-md      # install Codex hook + instructions`,
 	}
 
 	rootCmd.PersistentFlags().StringVar(&flagRepo, "repo", "", "Explicit repository root path")
